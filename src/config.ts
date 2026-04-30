@@ -35,7 +35,7 @@ export function loadConfig(): AppConfig {
   return {
     cwd: path.resolve(cwdArg),
     yolo,
-    model: process.env.CODEX_MODEL ?? "gpt-5.4",
+    model: process.env.CODEX_MODEL ?? "gpt-5.5",
     storePath: path.resolve(process.env.CODEX_TELEGRAM_STORE ?? ".codex-telegram-store.json"),
     telegramBotToken,
     allowedTelegramUserId,

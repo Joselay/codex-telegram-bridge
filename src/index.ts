@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   const existing = await store.get(projectRoot);
   console.log(existing ? `Resuming Codex thread ${existing.threadId}...` : "Starting a new Codex thread...");
   const threadId = existing
-    ? await codex.resumeThread(existing.threadId)
+    ? await codex.resumeThread(existing.threadId, config.model)
     : await codex.startThread(projectRoot, config.model);
   console.log(`Codex thread ready: ${threadId}`);
 

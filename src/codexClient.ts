@@ -57,9 +57,10 @@ export class CodexClient extends EventEmitter {
     return getThreadId(result);
   }
 
-  async resumeThread(threadId: string): Promise<string> {
+  async resumeThread(threadId: string, model: string): Promise<string> {
     const result = await this.request("thread/resume", {
       threadId,
+      model,
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });

@@ -8,6 +8,7 @@ This project is intentionally local-first:
 - This bridge spawns `codex app-server` over stdio.
 - Codex works on your local project folder.
 - `cdxyt` is yolo mode: `approvalPolicy: "never"` and `sandbox: "danger-full-access"`.
+- The default model is `gpt-5.5`, configurable with `CODEX_MODEL`.
 
 ## Setup
 
