@@ -1,4 +1,5 @@
 import { Telegraf } from "telegraf";
+import type { TelegramEmoji } from "telegraf/types";
 import type { CodexClient } from "./codex-client.js";
 import type { ReasoningLevel } from "./config.js";
 
@@ -19,9 +20,19 @@ type AgentMessage = {
   phase?: AgentMessagePhase;
 };
 
+type UserMessageRef = {
+  chatId: number | string;
+  messageId: number;
+};
+
+const REACTION_WORKING: TelegramEmoji = "👀";
+const REACTION_DONE: TelegramEmoji = "👌";
+const REACTION_ERROR: TelegramEmoji = "😢";
+
 export class TelegramBridgeBot {
   private readonly bot: Telegraf;
   private activeTurnId: string | undefined;
+  private activeUserMessage: UserMessageRef | undefined;
   private busy = false;
   private typingTimer: ReturnType<typeof setInterval> | undefined;
   private readonly chunks: string[] = [];
@@ -84,20 +95,28 @@ export class TelegramBridgeBot {
 
     this.bot.on("text", async (ctx) => {
       const text = ctx.message.text.trim();
+      const userMessage = {
+        chatId: ctx.chat.id,
+        messageId: ctx.message.message_id,
+      };
+
       if (!text || text.startsWith("/")) {
         return;
       }
 
       if (this.busy) {
+        await this.reactToMessage(userMessage, REACTION_WORKING);
         await ctx.reply("Codex is already working. Use /interrupt to stop the active turn.");
         return;
       }
 
       this.busy = true;
       this.activeTurnId = undefined;
+      this.activeUserMessage = userMessage;
       this.chunks.length = 0;
       this.agentMessages.length = 0;
       this.startTyping();
+      await this.reactToMessage(userMessage, REACTION_WORKING, true);
 
       try {
         this.activeTurnId = await this.options.codex.startTurn(
@@ -108,7 +127,9 @@ export class TelegramBridgeBot {
         );
       } catch (error) {
         this.busy = false;
+        this.activeUserMessage = undefined;
         this.stopTyping();
+        await this.reactToMessage(userMessage, REACTION_ERROR, true);
         await ctx.reply(`Codex error: ${formatError(error)}`);
       }
     });
@@ -142,10 +163,13 @@ export class TelegramBridgeBot {
     if (message.method === "turn/completed") {
       this.busy = false;
       this.activeTurnId = undefined;
+      const userMessage = this.activeUserMessage;
+      this.activeUserMessage = undefined;
       this.stopTyping();
       const text = this.buildReplyText();
       this.chunks.length = 0;
       this.agentMessages.length = 0;
+      await this.reactToMessage(userMessage, REACTION_DONE);
       await this.sendLongMessage(text || "Codex turn completed.");
     }
   }
@@ -209,6 +233,18 @@ export class TelegramBridgeBot {
       await this.bot.telegram.sendChatAction(this.options.allowedUserId, "typing");
     } catch (error) {
       console.error(`Telegram typing indicator error: ${formatError(error)}`);
+    }
+  }
+
+  private async reactToMessage(message: UserMessageRef | undefined, emoji: TelegramEmoji, isBig = false): Promise<void> {
+    if (!message) {
+      return;
+    }
+
+    try {
+      await this.bot.telegram.setMessageReaction(message.chatId, message.messageId, [{ type: "emoji", emoji }], isBig);
+    } catch (error) {
+      console.error(`Telegram reaction error: ${formatError(error)}`);
     }
   }
 
