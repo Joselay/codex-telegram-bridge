@@ -12,6 +12,28 @@ async function main(): Promise<void> {
   const projectRoot = await resolveProjectRoot(config.cwd);
   const store = new SessionStore(config.storePath);
   const codex = new CodexClient();
+  let bot: TelegramBridgeBot | undefined;
+  let stopping = false;
+
+  const stop = (exitCode: number): void => {
+    if (stopping) {
+      return;
+    }
+
+    stopping = true;
+    bot?.stop();
+    codex.stop();
+    process.exit(exitCode);
+  };
+
+  codex.on("exit", ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => {
+    if (stopping) {
+      return;
+    }
+
+    console.error(`Codex app-server exited unexpectedly: code=${code ?? "null"} signal=${signal ?? "null"}`);
+    stop(1);
+  });
 
   printWarning(projectRoot);
   console.log("Starting Codex app-server...");
@@ -33,7 +55,7 @@ async function main(): Promise<void> {
     updatedAt: new Date().toISOString(),
   });
 
-  const bot = new TelegramBridgeBot({
+  bot = new TelegramBridgeBot({
     token: config.telegramBotToken,
     allowedUserId: config.allowedTelegramUserId,
     projectRoot,
@@ -41,9 +63,7 @@ async function main(): Promise<void> {
     reasoningLevel: config.reasoningLevel,
     codex,
     onStop: () => {
-      bot.stop();
-      codex.stop();
-      process.exit(0);
+      stop(0);
     },
   });
 
@@ -55,15 +75,11 @@ async function main(): Promise<void> {
   console.log(`Thread: ${threadId}`);
 
   process.once("SIGINT", () => {
-    bot.stop();
-    codex.stop();
-    process.exit(0);
+    stop(0);
   });
 
   process.once("SIGTERM", () => {
-    bot.stop();
-    codex.stop();
-    process.exit(0);
+    stop(0);
   });
 }
 
