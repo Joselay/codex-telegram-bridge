@@ -3,12 +3,18 @@ import fs from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import readline from "node:readline";
 import { EventEmitter } from "node:events";
-import type { ReasoningLevel } from "./config.js";
+import type { ConfigReasoningLevel, ReasoningLevel } from "./config.js";
 import type { JsonRpcMessage, JsonRpcResponse } from "./types.js";
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+};
+
+export type CodexModel = {
+  id: string;
+  defaultReasoningEffort?: ReasoningLevel;
+  supportedReasoningEfforts?: Array<{ reasoningEffort?: ReasoningLevel }>;
 };
 
 export class CodexClient extends EventEmitter {
@@ -51,7 +57,7 @@ export class CodexClient extends EventEmitter {
     const result = await this.request("thread/start", {
       cwd,
       model,
-      config: { model_reasoning_effort: reasoningLevel },
+      config: toThreadConfig(reasoningLevel),
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       serviceName: "codex_telegram_bridge",
@@ -63,11 +69,17 @@ export class CodexClient extends EventEmitter {
     const result = await this.request("thread/resume", {
       threadId,
       model,
-      config: { model_reasoning_effort: reasoningLevel },
+      config: toThreadConfig(reasoningLevel),
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
     return getThreadId(result);
+  }
+
+  async listModels(): Promise<CodexModel[]> {
+    const result = await this.request("model/list", { includeHidden: true });
+    const data = (result as { data?: unknown })?.data;
+    return Array.isArray(data) ? data.filter(isCodexModel) : [];
   }
 
   async startTurn(
@@ -166,4 +178,12 @@ function getThreadId(result: unknown): string {
 function getTurnId(result: unknown): string | undefined {
   const turnId = (result as { turn?: { id?: unknown } })?.turn?.id;
   return typeof turnId === "string" ? turnId : undefined;
+}
+
+function toThreadConfig(reasoningLevel: ReasoningLevel): { model_reasoning_effort: ConfigReasoningLevel } | undefined {
+  return reasoningLevel === "none" ? undefined : { model_reasoning_effort: reasoningLevel };
+}
+
+function isCodexModel(value: unknown): value is CodexModel {
+  return typeof (value as { id?: unknown })?.id === "string";
 }

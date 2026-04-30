@@ -15,6 +15,7 @@ export type AppConfig = {
 };
 
 export type ReasoningLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ConfigReasoningLevel = Exclude<ReasoningLevel, "none">;
 
 export function loadConfig(): AppConfig {
   const args = process.argv.slice(2);
