@@ -16,6 +16,7 @@ export class TelegramBridgeBot {
   private readonly bot: Telegraf;
   private activeTurnId: string | undefined;
   private busy = false;
+  private typingTimer: ReturnType<typeof setInterval> | undefined;
   private readonly chunks: string[] = [];
 
   constructor(private readonly options: TelegramBotOptions) {
@@ -34,6 +35,7 @@ export class TelegramBridgeBot {
   }
 
   stop(): void {
+    this.stopTyping();
     this.bot.stop();
   }
 
@@ -87,7 +89,7 @@ export class TelegramBridgeBot {
       this.busy = true;
       this.activeTurnId = undefined;
       this.chunks.length = 0;
-      await ctx.reply("Sent to Codex yolo session.");
+      this.startTyping();
 
       try {
         this.activeTurnId = await this.options.codex.startTurn(
@@ -98,6 +100,7 @@ export class TelegramBridgeBot {
         );
       } catch (error) {
         this.busy = false;
+        this.stopTyping();
         await ctx.reply(`Codex error: ${formatError(error)}`);
       }
     });
@@ -123,6 +126,7 @@ export class TelegramBridgeBot {
     if (message.method === "turn/completed") {
       this.busy = false;
       this.activeTurnId = undefined;
+      this.stopTyping();
       const text = this.chunks.join("").trim();
       this.chunks.length = 0;
       await this.sendLongMessage(text || "Codex turn completed.");
@@ -143,6 +147,31 @@ export class TelegramBridgeBot {
     const limit = 3900;
     for (let i = 0; i < text.length; i += limit) {
       await this.bot.telegram.sendMessage(this.options.allowedUserId, text.slice(i, i + limit));
+    }
+  }
+
+  private startTyping(): void {
+    this.stopTyping();
+    void this.sendTyping();
+    this.typingTimer = setInterval(() => {
+      void this.sendTyping();
+    }, 4000);
+  }
+
+  private stopTyping(): void {
+    if (!this.typingTimer) {
+      return;
+    }
+
+    clearInterval(this.typingTimer);
+    this.typingTimer = undefined;
+  }
+
+  private async sendTyping(): Promise<void> {
+    try {
+      await this.bot.telegram.sendChatAction(this.options.allowedUserId, "typing");
+    } catch (error) {
+      console.error(`Telegram typing indicator error: ${formatError(error)}`);
     }
   }
 }
