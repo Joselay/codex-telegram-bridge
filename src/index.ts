@@ -19,8 +19,8 @@ async function main(): Promise<void> {
   const existing = await store.get(projectRoot);
   console.log(existing ? `Resuming Codex thread ${existing.threadId}...` : "Starting a new Codex thread...");
   const threadId = existing
-    ? await codex.resumeThread(existing.threadId, config.model, config.reasoningEffort)
-    : await codex.startThread(projectRoot, config.model, config.reasoningEffort);
+    ? await codex.resumeThread(existing.threadId, config.model, config.reasoningLevel)
+    : await codex.startThread(projectRoot, config.model, config.reasoningLevel);
   console.log(`Codex thread ready: ${threadId}`);
 
   await store.set(projectRoot, {
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     allowedUserId: config.allowedTelegramUserId,
     projectRoot,
     threadId,
-    reasoningEffort: config.reasoningEffort,
+    reasoningLevel: config.reasoningLevel,
     codex,
     onStop: () => {
       bot.stop();

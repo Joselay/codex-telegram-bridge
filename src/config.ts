@@ -8,13 +8,13 @@ export type AppConfig = {
   cwd: string;
   yolo: boolean;
   model: string;
-  reasoningEffort: ReasoningEffort;
+  reasoningLevel: ReasoningLevel;
   storePath: string;
   telegramBotToken: string;
   allowedTelegramUserId: number;
 };
 
-export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ReasoningLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export function loadConfig(): AppConfig {
   const args = process.argv.slice(2);
@@ -39,19 +39,21 @@ export function loadConfig(): AppConfig {
     cwd: path.resolve(cwdArg),
     yolo,
     model: process.env.CODEX_MODEL ?? "gpt-5.5",
-    reasoningEffort: readReasoningEffort(process.env.CODEX_REASONING_EFFORT ?? "high"),
+    reasoningLevel: readReasoningLevel(
+      process.env.CODEX_REASONING_LEVEL ?? process.env.CODEX_REASONING_EFFORT ?? "high",
+    ),
     storePath: path.resolve(process.env.CODEX_TELEGRAM_STORE ?? ".codex-telegram-store.json"),
     telegramBotToken,
     allowedTelegramUserId,
   };
 }
 
-function readReasoningEffort(value: string): ReasoningEffort {
+function readReasoningLevel(value: string): ReasoningLevel {
   if (["none", "minimal", "low", "medium", "high", "xhigh"].includes(value)) {
-    return value as ReasoningEffort;
+    return value as ReasoningLevel;
   }
 
-  throw new Error(`Invalid CODEX_REASONING_EFFORT: ${value}`);
+  throw new Error(`Invalid CODEX_REASONING_LEVEL: ${value}`);
 }
 
 function readArg(args: string[], name: string): string | undefined {
