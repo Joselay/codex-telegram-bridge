@@ -41,11 +41,8 @@ async function main(): Promise<void> {
   console.log("Codex app-server initialized.");
   await validateModelConfig(codex, config.model, config.reasoningLevel);
 
-  const existing = await store.get(projectRoot);
-  console.log(existing ? `Resuming Codex thread ${existing.threadId}...` : "Starting a new Codex thread...");
-  const threadId = existing
-    ? await codex.resumeThread(existing.threadId, config.model, config.reasoningLevel)
-    : await codex.startThread(projectRoot, config.model, config.reasoningLevel);
+  console.log("Starting a new Codex thread...");
+  const threadId = await codex.startThread(projectRoot, config.model, config.reasoningLevel);
   console.log(`Codex thread ready: ${threadId}`);
 
   await store.set(projectRoot, {

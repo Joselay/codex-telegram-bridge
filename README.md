@@ -7,6 +7,7 @@ This project is intentionally local-first:
 - Telegram talks to this bridge.
 - This bridge spawns `codex app-server` over stdio.
 - Codex works on your local project folder.
+- Every bridge launch starts a fresh Codex thread, even for the same project.
 - `cdxyt` is yolo mode: `approvalPolicy: "never"` and `sandbox: "danger-full-access"`.
 - The default model is `gpt-5.5`, configurable with `CODEX_MODEL`.
 - The default reasoning level is `high`, configurable with `CODEX_REASONING_LEVEL`.
