@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import readline from "node:readline";
 import { EventEmitter } from "node:events";
+import type { ReasoningEffort } from "./config.js";
 import type { JsonRpcMessage, JsonRpcResponse } from "./types.js";
 
 type PendingRequest = {
@@ -46,10 +47,11 @@ export class CodexClient extends EventEmitter {
     this.notify("initialized", {});
   }
 
-  async startThread(cwd: string, model: string): Promise<string> {
+  async startThread(cwd: string, model: string, reasoningEffort: ReasoningEffort): Promise<string> {
     const result = await this.request("thread/start", {
       cwd,
       model,
+      config: { model_reasoning_effort: reasoningEffort },
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       serviceName: "codex_telegram_bridge",
@@ -57,20 +59,27 @@ export class CodexClient extends EventEmitter {
     return getThreadId(result);
   }
 
-  async resumeThread(threadId: string, model: string): Promise<string> {
+  async resumeThread(threadId: string, model: string, reasoningEffort: ReasoningEffort): Promise<string> {
     const result = await this.request("thread/resume", {
       threadId,
       model,
+      config: { model_reasoning_effort: reasoningEffort },
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
     return getThreadId(result);
   }
 
-  async startTurn(threadId: string, text: string, cwd: string): Promise<string | undefined> {
+  async startTurn(
+    threadId: string,
+    text: string,
+    cwd: string,
+    reasoningEffort: ReasoningEffort,
+  ): Promise<string | undefined> {
     const result = await this.request("turn/start", {
       threadId,
       cwd,
+      effort: reasoningEffort,
       approvalPolicy: "never",
       sandboxPolicy: { type: "dangerFullAccess" },
       input: [{ type: "text", text }],

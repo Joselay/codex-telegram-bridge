@@ -9,6 +9,7 @@ This project is intentionally local-first:
 - Codex works on your local project folder.
 - `cdxyt` is yolo mode: `approvalPolicy: "never"` and `sandbox: "danger-full-access"`.
 - The default model is `gpt-5.5`, configurable with `CODEX_MODEL`.
+- The default reasoning effort is `high`, configurable with `CODEX_REASONING_EFFORT`.
 
 ## Setup
 

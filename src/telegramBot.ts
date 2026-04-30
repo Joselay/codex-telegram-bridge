@@ -1,11 +1,13 @@
 import { Telegraf } from "telegraf";
 import type { CodexClient } from "./codexClient.js";
+import type { ReasoningEffort } from "./config.js";
 
 type TelegramBotOptions = {
   token: string;
   allowedUserId: number;
   projectRoot: string;
   threadId: string;
+  reasoningEffort: ReasoningEffort;
   codex: CodexClient;
   onStop: () => void;
 };
@@ -92,6 +94,7 @@ export class TelegramBridgeBot {
           this.options.threadId,
           text,
           this.options.projectRoot,
+          this.options.reasoningEffort,
         );
       } catch (error) {
         this.busy = false;
@@ -131,6 +134,7 @@ export class TelegramBridgeBot {
       "Codex Telegram Bridge is running in YOLO mode.",
       `Project: ${this.options.projectRoot}`,
       `Thread: ${this.options.threadId}`,
+      `Model effort: ${this.options.reasoningEffort}`,
       `Busy: ${this.busy ? "yes" : "no"}`,
     ].join("\n");
   }
