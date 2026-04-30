@@ -28,7 +28,7 @@ export class CodexClient extends EventEmitter {
     });
     this.proc = proc;
 
-    const stderrLog = fs.createWriteStream("codex-app-server.log", { flags: "a" });
+    const stderrLog = fs.createWriteStream("codex-app-server.log", { flags: "a", mode: 0o600 });
     stderrLog.write(`\n--- codex app-server started ${new Date().toISOString()} ---\n`);
     proc.stderr.pipe(stderrLog);
 

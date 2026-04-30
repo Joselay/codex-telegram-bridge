@@ -28,7 +28,7 @@ export function loadConfig(): AppConfig {
     throw new Error("Missing TELEGRAM_BOT_TOKEN in environment or .env");
   }
 
-  if (!Number.isSafeInteger(allowedTelegramUserId)) {
+  if (!Number.isSafeInteger(allowedTelegramUserId) || allowedTelegramUserId <= 0) {
     throw new Error("Missing or invalid TELEGRAM_ALLOWED_USER_ID in environment or .env");
   }
 

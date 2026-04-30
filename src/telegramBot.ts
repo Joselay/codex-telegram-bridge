@@ -49,8 +49,7 @@ export class TelegramBridgeBot {
 
   private registerHandlers(): void {
     this.bot.use(async (ctx, next) => {
-      if (ctx.from?.id !== this.options.allowedUserId) {
-        await ctx.reply("Unauthorized.");
+      if (!this.isAllowedPrivateUser(ctx.chat?.type, ctx.from?.id)) {
         return;
       }
       await next();
@@ -211,6 +210,10 @@ export class TelegramBridgeBot {
     } catch (error) {
       console.error(`Telegram typing indicator error: ${formatError(error)}`);
     }
+  }
+
+  private isAllowedPrivateUser(chatType: string | undefined, userId: number | undefined): boolean {
+    return chatType === "private" && userId === this.options.allowedUserId;
   }
 }
 

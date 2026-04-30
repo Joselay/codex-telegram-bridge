@@ -14,7 +14,7 @@ export class SessionStore {
     const store = await this.read();
     store.projects[projectRoot] = record;
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    await fs.writeFile(this.filePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+    await fs.writeFile(this.filePath, `${JSON.stringify(store, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   }
 
   private async read(): Promise<StoreFile> {
