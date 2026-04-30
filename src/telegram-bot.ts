@@ -1,5 +1,5 @@
 import { Telegraf } from "telegraf";
-import type { CodexClient } from "./codexClient.js";
+import type { CodexClient } from "./codex-client.js";
 import type { ReasoningLevel } from "./config.js";
 
 type TelegramBotOptions = {

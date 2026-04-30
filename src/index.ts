@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { CodexClient } from "./codexClient.js";
-import type { CodexModel } from "./codexClient.js";
+import { CodexClient } from "./codex-client.js";
+import type { CodexModel } from "./codex-client.js";
 import type { ReasoningLevel } from "./config.js";
 import { loadConfig } from "./config.js";
 import { resolveProjectRoot } from "./project.js";
-import { SessionStore } from "./sessionStore.js";
-import { TelegramBridgeBot } from "./telegramBot.js";
+import { SessionStore } from "./session-store.js";
+import { TelegramBridgeBot } from "./telegram-bot.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
