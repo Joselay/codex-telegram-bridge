@@ -12,12 +12,20 @@ type TelegramBotOptions = {
   onStop: () => void;
 };
 
+type AgentMessagePhase = "commentary" | "final_answer";
+
+type AgentMessage = {
+  text: string;
+  phase?: AgentMessagePhase;
+};
+
 export class TelegramBridgeBot {
   private readonly bot: Telegraf;
   private activeTurnId: string | undefined;
   private busy = false;
   private typingTimer: ReturnType<typeof setInterval> | undefined;
   private readonly chunks: string[] = [];
+  private readonly agentMessages: AgentMessage[] = [];
 
   constructor(private readonly options: TelegramBotOptions) {
     this.bot = new Telegraf(options.token);
@@ -89,6 +97,7 @@ export class TelegramBridgeBot {
       this.busy = true;
       this.activeTurnId = undefined;
       this.chunks.length = 0;
+      this.agentMessages.length = 0;
       this.startTyping();
 
       try {
@@ -123,14 +132,43 @@ export class TelegramBridgeBot {
       return;
     }
 
+    if (message.method === "item/completed") {
+      const agentMessage = readCompletedAgentMessage(message.params);
+      if (agentMessage) {
+        this.agentMessages.push(agentMessage);
+      }
+      return;
+    }
+
     if (message.method === "turn/completed") {
       this.busy = false;
       this.activeTurnId = undefined;
       this.stopTyping();
-      const text = this.chunks.join("").trim();
+      const text = this.buildReplyText();
       this.chunks.length = 0;
+      this.agentMessages.length = 0;
       await this.sendLongMessage(text || "Codex turn completed.");
     }
+  }
+
+  private buildReplyText(): string {
+    const finalMessages = this.agentMessages
+      .filter((message) => message.phase === "final_answer")
+      .map((message) => message.text);
+
+    if (finalMessages.length > 0) {
+      return cleanTelegramText(finalMessages.join("\n\n"));
+    }
+
+    const unknownPhaseMessages = this.agentMessages
+      .filter((message) => !message.phase)
+      .map((message) => message.text);
+
+    if (unknownPhaseMessages.length > 0) {
+      return cleanTelegramText(unknownPhaseMessages.join("\n\n"));
+    }
+
+    return cleanTelegramText(this.chunks.join(""));
   }
 
   private statusText(): string {
@@ -178,4 +216,33 @@ export class TelegramBridgeBot {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function readCompletedAgentMessage(params: unknown): AgentMessage | undefined {
+  const item = (params as { item?: { type?: unknown; text?: unknown; phase?: unknown } })?.item;
+  if (item?.type !== "agentMessage" || typeof item.text !== "string" || !item.text.trim()) {
+    return undefined;
+  }
+
+  return {
+    text: item.text,
+    phase: readAgentMessagePhase(item.phase),
+  };
+}
+
+function readAgentMessagePhase(value: unknown): AgentMessagePhase | undefined {
+  return value === "commentary" || value === "final_answer" ? value : undefined;
+}
+
+function cleanTelegramText(text: string): string {
+  return text
+    .replace(/^```[^\n]*\n?/gm, "")
+    .replace(/^```\s*$/gm, "")
+    .replace(/\[([^\]]+)\]\((?:\/|file:\/\/)[^)]+\)/g, "$1")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/__([^_\n]+)__/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
