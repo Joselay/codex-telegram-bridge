@@ -15,7 +15,22 @@ export type CodexModel = {
   id: string;
   defaultReasoningEffort?: ReasoningLevel;
   supportedReasoningEfforts?: Array<{ reasoningEffort?: ReasoningLevel }>;
+  inputModalities?: string[];
 };
+
+export type CodexInputItem =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "image";
+      url: string;
+    }
+  | {
+      type: "localImage";
+      path: string;
+    };
 
 export class CodexClient extends EventEmitter {
   private proc: ChildProcessByStdio<Writable, Readable, Readable> | undefined;
@@ -84,7 +99,7 @@ export class CodexClient extends EventEmitter {
 
   async startTurn(
     threadId: string,
-    text: string,
+    input: CodexInputItem[],
     cwd: string,
     reasoningLevel: ReasoningLevel,
   ): Promise<string | undefined> {
@@ -94,7 +109,7 @@ export class CodexClient extends EventEmitter {
       effort: reasoningLevel,
       approvalPolicy: "never",
       sandboxPolicy: { type: "dangerFullAccess" },
-      input: [{ type: "text", text }],
+      input,
     });
 
     return getTurnId(result);

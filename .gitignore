@@ -3,4 +3,5 @@ dist/
 .env
 .tmp-schema/
 .codex-telegram-store.json
+.codex-telegram-attachments/
 *.log

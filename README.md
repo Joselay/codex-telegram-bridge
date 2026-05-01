@@ -45,6 +45,10 @@ cdxyt() {
 
 Any normal text message is sent to the active Codex thread.
 
+Photos and documents are downloaded locally and sent to Codex. Images are passed as
+Codex `localImage` inputs when the selected model supports image input; other files
+are saved locally and sent as file paths for Codex to inspect.
+
 ## Warning
 
 Yolo mode lets Codex edit files and run commands without approval. Keep this bridge local, use only your Telegram user ID, and do not expose Codex App Server to the network.

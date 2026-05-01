@@ -39,7 +39,7 @@ async function main(): Promise<void> {
   console.log("Starting Codex app-server...");
   await codex.start();
   console.log("Codex app-server initialized.");
-  await validateModelConfig(codex, config.model, config.reasoningLevel);
+  const model = await validateModelConfig(codex, config.model, config.reasoningLevel);
 
   console.log("Starting a new Codex thread...");
   const threadId = await codex.startThread(projectRoot, config.model, config.reasoningLevel);
@@ -58,6 +58,7 @@ async function main(): Promise<void> {
     projectRoot,
     threadId,
     reasoningLevel: config.reasoningLevel,
+    supportsImageInput: supportsImageInput(model),
     codex,
     onStop: () => {
       stop(0);
@@ -86,7 +87,11 @@ function printWarning(projectRoot: string): void {
   console.warn(`Project: ${projectRoot}`);
 }
 
-async function validateModelConfig(codex: CodexClient, modelId: string, reasoningLevel: ReasoningLevel): Promise<void> {
+async function validateModelConfig(
+  codex: CodexClient,
+  modelId: string,
+  reasoningLevel: ReasoningLevel,
+): Promise<CodexModel> {
   const models = await codex.listModels();
   const model = models.find((candidate) => candidate.id === modelId);
 
@@ -96,7 +101,7 @@ async function validateModelConfig(codex: CodexClient, modelId: string, reasonin
 
   const supportedEfforts = readSupportedReasoningEfforts(model);
   if (supportedEfforts.length === 0) {
-    return;
+    return model;
   }
 
   if (!supportedEfforts.includes(reasoningLevel)) {
@@ -106,6 +111,8 @@ async function validateModelConfig(codex: CodexClient, modelId: string, reasonin
       )}.`,
     );
   }
+
+  return model;
 }
 
 function readSupportedReasoningEfforts(model: CodexModel): ReasoningLevel[] {
@@ -118,6 +125,10 @@ function readSupportedReasoningEfforts(model: CodexModel): ReasoningLevel[] {
   }
 
   return model.defaultReasoningEffort ? [model.defaultReasoningEffort] : [];
+}
+
+function supportsImageInput(model: CodexModel): boolean {
+  return !model.inputModalities || model.inputModalities.includes("image");
 }
 
 main().catch((error) => {
