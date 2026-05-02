@@ -14,7 +14,7 @@ export type VoiceConfig = {
   maxReplyChars: number;
 };
 
-export type SynthesizedVoice = {
+type SynthesizedVoice = {
   path: string;
   text: string;
   truncated: boolean;

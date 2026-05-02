@@ -7,7 +7,7 @@ import type { VoiceConfig } from "./voice.js";
 
 dotenv.config();
 
-export type AppConfig = {
+type AppConfig = {
   cwd: string;
   yolo: boolean;
   model: string;

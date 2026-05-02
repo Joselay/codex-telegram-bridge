@@ -1,9 +1,3 @@
-export type JsonRpcRequest = {
-  method: string;
-  id?: number;
-  params?: unknown;
-};
-
 export type JsonRpcResponse = {
   id?: number;
   result?: unknown;
@@ -14,7 +8,7 @@ export type JsonRpcResponse = {
   };
 };
 
-export type JsonRpcNotification = {
+type JsonRpcNotification = {
   method: string;
   params?: unknown;
 };

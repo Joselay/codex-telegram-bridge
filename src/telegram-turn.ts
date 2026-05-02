@@ -6,7 +6,7 @@ export type UserMessageRef = {
   messageId: number;
 };
 
-export type CompletedTurn = {
+type CompletedTurn = {
   userMessage: UserMessageRef | undefined;
   replyAsVoice: boolean;
   replyText: string;

@@ -1,7 +1,7 @@
 import { MAX_FILE_SENDS_PER_TURN } from "./telegram-files.js";
 import type { TelegramSendMode, TelegramSendRequest } from "./telegram-files.js";
 
-export type AgentMessagePhase = "commentary" | "final_answer";
+type AgentMessagePhase = "commentary" | "final_answer";
 
 export type AgentMessage = {
   text: string;
