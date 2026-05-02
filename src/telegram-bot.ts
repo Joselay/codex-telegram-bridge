@@ -80,33 +80,6 @@ export class TelegramBridgeBot {
       await next();
     });
 
-    this.bot.start(async (ctx) => {
-      await ctx.reply(this.statusText());
-    });
-
-    this.bot.command("status", async (ctx) => {
-      await ctx.reply(this.statusText());
-    });
-
-    this.bot.command("session", async (ctx) => {
-      await ctx.reply(this.statusText());
-    });
-
-    this.bot.command("interrupt", async (ctx) => {
-      if (!this.turn.turnId) {
-        await ctx.reply("No active turn to interrupt.");
-        return;
-      }
-
-      await this.options.codex.interrupt(this.options.threadId, this.turn.turnId);
-      await ctx.reply("Interrupt requested.");
-    });
-
-    this.bot.command("stop", async (ctx) => {
-      await ctx.reply("Stopping bridge.");
-      this.options.onStop();
-    });
-
     this.bot.on("text", async (ctx) => {
       const text = ctx.message.text.trim();
       const userMessage = {
@@ -114,7 +87,7 @@ export class TelegramBridgeBot {
         messageId: ctx.message.message_id,
       };
 
-      if (!text || text.startsWith("/")) {
+      if (!text) {
         return;
       }
 
@@ -287,13 +260,12 @@ export class TelegramBridgeBot {
     }
 
     try {
-      const turnId = await this.options.codex.startTurn(
+      await this.options.codex.startTurn(
         this.options.threadId,
         input,
         this.options.projectRoot,
         this.options.reasoningLevel,
       );
-      this.turn.setTurnId(turnId);
     } catch (error) {
       await this.failTurnSetup(userMessage, reply, "Codex error", error);
     }
@@ -301,7 +273,7 @@ export class TelegramBridgeBot {
 
   private async replyBusy(userMessage: UserMessageRef, reply: ReplyFn): Promise<void> {
     await this.reactToMessage(userMessage, REACTION_WORKING);
-    await reply("Codex is already working. Use /interrupt to stop the active turn.");
+    await reply("Codex is already working. Wait for the active turn to finish.");
   }
 
   private beginTurn(userMessage: UserMessageRef, replyAsVoice: boolean): void {
@@ -328,9 +300,6 @@ export class TelegramBridgeBot {
       case "item/agentMessage/delta":
         this.handleAgentMessageDelta(message.params);
         return;
-      case "turn/started":
-        this.handleTurnStarted(message.params);
-        return;
       case "item/completed":
         this.handleItemCompleted(message.params);
         return;
@@ -346,13 +315,6 @@ export class TelegramBridgeBot {
     const delta = (params as { delta?: unknown })?.delta;
     if (typeof delta === "string") {
       this.turn.appendDelta(delta);
-    }
-  }
-
-  private handleTurnStarted(params: unknown): void {
-    const turnId = (params as { turn?: { id?: unknown } })?.turn?.id;
-    if (typeof turnId === "string") {
-      this.turn.setTurnId(turnId);
     }
   }
 
@@ -386,20 +348,6 @@ export class TelegramBridgeBot {
     } finally {
       await this.fileDelivery.cleanupTurnTempFiles();
     }
-  }
-
-  private statusText(): string {
-    return [
-      "Codex Telegram Bridge is running in YOLO mode.",
-      `Project: ${this.options.projectRoot}`,
-      `Thread: ${this.options.threadId}`,
-      `Reasoning level: ${this.options.reasoningLevel}`,
-      `Temporary files: ${this.options.temporaryRoot}`,
-      `File send roots: ${this.options.fileSendRoots.join(", ")}`,
-      `File send max: ${formatBytes(this.options.fileSendMaxBytes)}`,
-      ...this.options.voice.statusLines(),
-      `Busy: ${this.turn.isBusy ? "yes" : "no"}`,
-    ].join("\n");
   }
 
   private async sendReplyText(text: string, replyAsVoice: boolean): Promise<void> {

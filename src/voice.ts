@@ -39,16 +39,6 @@ export class VoiceService {
     }
   }
 
-  statusLines(): string[] {
-    return [
-      `Voice replies: ${this.config.replyWithVoice ? "enabled" : "disabled"}`,
-      `Whisper bin: ${this.config.whisperBin}`,
-      `Whisper model: ${this.config.whisperModel}`,
-      `Whisper language: ${this.config.whisperLanguage}`,
-      `TTS voice: ${this.config.ttsVoice ?? "system default"}`,
-    ];
-  }
-
   async transcribe(inputPath: string): Promise<string> {
     const wavPath = await this.convertToWhisperWav(inputPath);
 

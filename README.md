@@ -37,15 +37,10 @@ cdxyt() {
 }
 ```
 
-## Telegram Commands
+## Telegram Messages
 
-- `/start` - show current bridge status
-- `/status` - show active project/thread
-- `/session` - show active project/thread
-- `/interrupt` - interrupt current Codex turn
-- `/stop` - stop the bridge process
-
-Any normal text message is sent to the active Codex thread.
+Every private text message from the allowed Telegram user is sent to the active
+Codex thread, including slash-prefixed text.
 
 English Telegram voice messages are downloaded locally, transcribed with
 `whisper.cpp`, and sent to the active Codex thread as text. When a turn starts

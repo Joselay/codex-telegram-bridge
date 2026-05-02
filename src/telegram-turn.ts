@@ -13,7 +13,6 @@ export type CompletedTurn = {
 };
 
 export class TelegramTurnState {
-  private activeTurnId: string | undefined;
   private activeUserMessage: UserMessageRef | undefined;
   private busy = false;
   private activeReplyAsVoice = false;
@@ -24,13 +23,8 @@ export class TelegramTurnState {
     return this.busy;
   }
 
-  get turnId(): string | undefined {
-    return this.activeTurnId;
-  }
-
   begin(userMessage: UserMessageRef, replyAsVoice: boolean): void {
     this.busy = true;
-    this.activeTurnId = undefined;
     this.activeUserMessage = userMessage;
     this.activeReplyAsVoice = replyAsVoice;
     this.chunks.length = 0;
@@ -39,10 +33,6 @@ export class TelegramTurnState {
 
   setReplyAsVoice(replyAsVoice: boolean): void {
     this.activeReplyAsVoice = replyAsVoice;
-  }
-
-  setTurnId(turnId: string | undefined): void {
-    this.activeTurnId = turnId;
   }
 
   appendDelta(delta: string): void {
@@ -55,7 +45,6 @@ export class TelegramTurnState {
 
   failSetup(): void {
     this.busy = false;
-    this.activeTurnId = undefined;
     this.activeUserMessage = undefined;
     this.activeReplyAsVoice = false;
     this.chunks.length = 0;
@@ -64,7 +53,6 @@ export class TelegramTurnState {
 
   complete(): CompletedTurn {
     this.busy = false;
-    this.activeTurnId = undefined;
     const userMessage = this.activeUserMessage;
     const replyAsVoice = this.activeReplyAsVoice;
     const replyText = this.buildReplyText();

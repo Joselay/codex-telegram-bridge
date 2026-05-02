@@ -116,8 +116,8 @@ export class CodexClient extends EventEmitter {
     input: CodexInputItem[],
     cwd: string,
     reasoningLevel: ReasoningLevel,
-  ): Promise<string | undefined> {
-    const result = await this.request("turn/start", {
+  ): Promise<void> {
+    await this.request("turn/start", {
       threadId,
       cwd,
       effort: reasoningLevel,
@@ -125,12 +125,6 @@ export class CodexClient extends EventEmitter {
       sandboxPolicy: { type: "dangerFullAccess" },
       input,
     });
-
-    return getTurnId(result);
-  }
-
-  async interrupt(threadId: string, turnId: string): Promise<void> {
-    await this.request("turn/interrupt", { threadId, turnId });
   }
 
   stop(): void {
@@ -202,11 +196,6 @@ function getThreadId(result: unknown): string {
     throw new Error("Codex response did not include thread.id");
   }
   return threadId;
-}
-
-function getTurnId(result: unknown): string | undefined {
-  const turnId = (result as { turn?: { id?: unknown } })?.turn?.id;
-  return typeof turnId === "string" ? turnId : undefined;
 }
 
 function toThreadConfig(reasoningLevel: ReasoningLevel): { model_reasoning_effort: ConfigReasoningLevel } | undefined {
