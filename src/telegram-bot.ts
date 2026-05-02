@@ -1,17 +1,12 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { Telegraf } from "telegraf";
 import type { TelegramEmoji } from "telegraf/types";
 import type { CodexClient, CodexInputItem } from "./codex-client.js";
 import type { ReasoningLevel } from "./config.js";
+import { formatError } from "./runtime.js";
+import { MAX_ATTACHMENT_BYTES, TelegramAttachmentService } from "./telegram-attachments.js";
 import { TelegramFileDelivery } from "./telegram-delivery.js";
-import {
-  buildSafeAttachmentName,
-  formatBytes,
-  isImageAttachment,
-  MAX_FILE_SENDS_PER_TURN,
-} from "./telegram-files.js";
-import type { SavedAttachment } from "./telegram-files.js";
+import { formatBytes, MAX_FILE_SENDS_PER_TURN } from "./telegram-files.js";
+import { sendLongTelegramMessage } from "./telegram-message.js";
 import { extractFileSendRequests, readCompletedAgentMessage } from "./telegram-text.js";
 import { TelegramTurnState } from "./telegram-turn.js";
 import type { UserMessageRef } from "./telegram-turn.js";
@@ -32,20 +27,26 @@ type TelegramBotOptions = {
   onStop: () => void;
 };
 
+type ReplyFn = (text: string) => Promise<unknown>;
+
 const REACTION_WORKING: TelegramEmoji = "👀";
 const REACTION_DONE: TelegramEmoji = "👌";
 const REACTION_ERROR: TelegramEmoji = "😢";
-const ATTACHMENT_DIR = "attachments";
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 export class TelegramBridgeBot {
   private readonly bot: Telegraf;
+  private readonly attachments: TelegramAttachmentService;
   private readonly fileDelivery: TelegramFileDelivery;
   private readonly turn = new TelegramTurnState();
   private typingTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly options: TelegramBotOptions) {
     this.bot = new Telegraf(options.token);
+    this.attachments = new TelegramAttachmentService({
+      telegram: this.bot.telegram,
+      temporaryRoot: options.temporaryRoot,
+      supportsImageInput: options.supportsImageInput,
+    });
     this.fileDelivery = new TelegramFileDelivery({
       telegram: this.bot.telegram,
       allowedUserId: options.allowedUserId,
@@ -179,31 +180,21 @@ export class TelegramBridgeBot {
 
   private async handleAttachment(
     userMessage: UserMessageRef,
-    reply: (text: string) => Promise<unknown>,
+    reply: ReplyFn,
     fileId: string,
     fileName: string,
     mimeType: string | undefined,
     fileSize: number | undefined,
     caption: string | undefined,
   ): Promise<void> {
-    if (this.turn.isBusy) {
-      await this.replyBusy(userMessage, reply);
+    if (!(await this.beginIncomingFileTurn(userMessage, reply, "Attachment", fileSize, false))) {
       return;
     }
-
-    if (fileSize && fileSize > MAX_ATTACHMENT_BYTES) {
-      await this.reactToMessage(userMessage, REACTION_ERROR);
-      await reply(`Attachment is too large. Limit: ${formatBytes(MAX_ATTACHMENT_BYTES)}.`);
-      return;
-    }
-
-    this.beginTurn(userMessage, false);
-    await this.reactToMessage(userMessage, REACTION_WORKING, true);
 
     try {
-      const saved = await this.downloadTelegramFile(fileId, fileName, mimeType);
+      const saved = await this.attachments.download(fileId, fileName, mimeType);
       this.fileDelivery.trackTurnTempFile(saved.path);
-      const input = this.buildAttachmentInput(saved, caption);
+      const input = this.attachments.buildCodexInput(saved, caption);
       await this.startCodexTurn(userMessage, input, reply, true, true);
     } catch (error) {
       await this.failTurnSetup(userMessage, reply, "Attachment error", error);
@@ -212,27 +203,17 @@ export class TelegramBridgeBot {
 
   private async handleVoiceMessage(
     userMessage: UserMessageRef,
-    reply: (text: string) => Promise<unknown>,
+    reply: ReplyFn,
     fileId: string,
     mimeType: string | undefined,
     fileSize: number | undefined,
   ): Promise<void> {
-    if (this.turn.isBusy) {
-      await this.replyBusy(userMessage, reply);
+    if (!(await this.beginIncomingFileTurn(userMessage, reply, "Voice message", fileSize, true))) {
       return;
     }
-
-    if (fileSize && fileSize > MAX_ATTACHMENT_BYTES) {
-      await this.reactToMessage(userMessage, REACTION_ERROR);
-      await reply(`Voice message is too large. Limit: ${formatBytes(MAX_ATTACHMENT_BYTES)}.`);
-      return;
-    }
-
-    this.beginTurn(userMessage, true);
-    await this.reactToMessage(userMessage, REACTION_WORKING, true);
 
     try {
-      const saved = await this.downloadTelegramFile(fileId, "telegram-voice.ogg", mimeType ?? "audio/ogg");
+      const saved = await this.attachments.download(fileId, "telegram-voice.ogg", mimeType ?? "audio/ogg");
       let transcript: string;
       try {
         transcript = await this.options.voice.transcribe(saved.path);
@@ -246,20 +227,7 @@ export class TelegramBridgeBot {
 
       await this.startCodexTurn(
         userMessage,
-        [
-          {
-            type: "text",
-            text: [
-              "An English Telegram voice message was transcribed locally with whisper.cpp.",
-              "Use the transcript below as the user's request and respond normally.",
-              "The bridge may send your final answer back to Telegram as a voice note.",
-              "",
-              "<transcript>",
-              transcript,
-              "</transcript>",
-            ].join("\n"),
-          },
-        ],
+        buildVoiceTranscriptInput(transcript),
         reply,
         true,
         true,
@@ -270,42 +238,33 @@ export class TelegramBridgeBot {
     }
   }
 
-  private buildAttachmentInput(attachment: SavedAttachment, caption: string | undefined): CodexInputItem[] {
-    const text = [
-      `User sent a Telegram attachment saved at: ${attachment.path}`,
-      `Original filename: ${attachment.originalName}`,
-      `MIME type: ${attachment.mimeType ?? "unknown"}`,
-      caption?.trim() ? `Caption: ${caption.trim()}` : undefined,
-      attachment.isImage
-        ? "Inspect the attached image and respond to the user's request."
-        : "Inspect the local file path above and respond to the user's request.",
-    ]
-      .filter((line): line is string => Boolean(line))
-      .join("\n");
-
-    if (attachment.isImage && this.options.supportsImageInput) {
-      return [
-        { type: "text", text },
-        { type: "localImage", path: attachment.path },
-      ];
+  private async beginIncomingFileTurn(
+    userMessage: UserMessageRef,
+    reply: ReplyFn,
+    label: string,
+    fileSize: number | undefined,
+    replyAsVoice: boolean,
+  ): Promise<boolean> {
+    if (this.turn.isBusy) {
+      await this.replyBusy(userMessage, reply);
+      return false;
     }
 
-    if (attachment.isImage) {
-      return [
-        {
-          type: "text",
-          text: `${text}\n\nNote: the selected Codex model does not advertise image input support, so use the saved file path if possible.`,
-        },
-      ];
+    if (fileSize && fileSize > MAX_ATTACHMENT_BYTES) {
+      await this.reactToMessage(userMessage, REACTION_ERROR);
+      await reply(`${label} is too large. Limit: ${formatBytes(MAX_ATTACHMENT_BYTES)}.`);
+      return false;
     }
 
-    return [{ type: "text", text }];
+    this.beginTurn(userMessage, replyAsVoice);
+    await this.reactToMessage(userMessage, REACTION_WORKING, true);
+    return true;
   }
 
   private async startCodexTurn(
     userMessage: UserMessageRef,
     input: CodexInputItem[],
-    reply: (text: string) => Promise<unknown>,
+    reply: ReplyFn,
     alreadyReacted = false,
     alreadyBusy = false,
     replyAsVoice = false,
@@ -340,7 +299,7 @@ export class TelegramBridgeBot {
     }
   }
 
-  private async replyBusy(userMessage: UserMessageRef, reply: (text: string) => Promise<unknown>): Promise<void> {
+  private async replyBusy(userMessage: UserMessageRef, reply: ReplyFn): Promise<void> {
     await this.reactToMessage(userMessage, REACTION_WORKING);
     await reply("Codex is already working. Use /interrupt to stop the active turn.");
   }
@@ -353,7 +312,7 @@ export class TelegramBridgeBot {
 
   private async failTurnSetup(
     userMessage: UserMessageRef,
-    reply: (text: string) => Promise<unknown>,
+    reply: ReplyFn,
     label: string,
     error: unknown,
   ): Promise<void> {
@@ -364,83 +323,68 @@ export class TelegramBridgeBot {
     await reply(`${label}: ${formatError(error)}`);
   }
 
-  private async downloadTelegramFile(
-    fileId: string,
-    originalName: string,
-    mimeType: string | undefined,
-  ): Promise<SavedAttachment> {
-    const link = await this.bot.telegram.getFileLink(fileId);
-    const response = await fetch(link);
-    if (!response.ok) {
-      throw new Error(`Telegram download failed: ${response.status} ${response.statusText}`);
+  private async handleCodexNotification(message: { method?: string; params?: unknown }): Promise<void> {
+    switch (message.method) {
+      case "item/agentMessage/delta":
+        this.handleAgentMessageDelta(message.params);
+        return;
+      case "turn/started":
+        this.handleTurnStarted(message.params);
+        return;
+      case "item/completed":
+        this.handleItemCompleted(message.params);
+        return;
+      case "turn/completed":
+        await this.handleTurnCompleted();
+        return;
+      default:
+        return;
     }
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.byteLength > MAX_ATTACHMENT_BYTES) {
-      throw new Error(`Attachment is too large. Limit: ${formatBytes(MAX_ATTACHMENT_BYTES)}.`);
-    }
-
-    const directory = path.join(this.options.temporaryRoot, ATTACHMENT_DIR);
-    const safeName = buildSafeAttachmentName(originalName, mimeType);
-    const filePath = path.join(directory, safeName);
-    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-    await fs.writeFile(filePath, buffer, { mode: 0o600 });
-
-    return {
-      path: filePath,
-      originalName,
-      mimeType,
-      isImage: isImageAttachment(originalName, mimeType),
-    };
   }
 
-  private async handleCodexNotification(message: { method?: string; params?: unknown }): Promise<void> {
-    if (message.method === "item/agentMessage/delta") {
-      const delta = (message.params as { delta?: unknown })?.delta;
-      if (typeof delta === "string") {
-        this.turn.appendDelta(delta);
-      }
-      return;
+  private handleAgentMessageDelta(params: unknown): void {
+    const delta = (params as { delta?: unknown })?.delta;
+    if (typeof delta === "string") {
+      this.turn.appendDelta(delta);
     }
+  }
 
-    if (message.method === "turn/started") {
-      const turnId = (message.params as { turn?: { id?: unknown } })?.turn?.id;
-      if (typeof turnId === "string") {
-        this.turn.setTurnId(turnId);
-      }
-      return;
+  private handleTurnStarted(params: unknown): void {
+    const turnId = (params as { turn?: { id?: unknown } })?.turn?.id;
+    if (typeof turnId === "string") {
+      this.turn.setTurnId(turnId);
     }
+  }
 
-    if (message.method === "item/completed") {
-      const agentMessage = readCompletedAgentMessage(message.params);
-      if (agentMessage) {
-        this.turn.appendAgentMessage(agentMessage);
-      }
-      return;
+  private handleItemCompleted(params: unknown): void {
+    const agentMessage = readCompletedAgentMessage(params);
+    if (agentMessage) {
+      this.turn.appendAgentMessage(agentMessage);
     }
+  }
 
-    if (message.method === "turn/completed") {
-      const completedTurn = this.turn.complete();
-      this.stopTyping();
-      const { text, requests, skippedFileCount } = extractFileSendRequests(completedTurn.replyText);
-      try {
-        await this.reactToMessage(completedTurn.userMessage, REACTION_DONE);
-        if (text) {
-          await this.sendReplyText(text, completedTurn.replyAsVoice);
-        } else if (requests.length === 0) {
-          await this.sendLongMessage("Codex turn completed.");
-        }
+  private async handleTurnCompleted(): Promise<void> {
+    const completedTurn = this.turn.complete();
+    this.stopTyping();
+    const { text, requests, skippedFileCount } = extractFileSendRequests(completedTurn.replyText);
 
-        if (skippedFileCount > 0) {
-          await this.sendLongMessage(`Skipped ${skippedFileCount} extra file request(s). Limit: ${MAX_FILE_SENDS_PER_TURN}.`);
-        }
-
-        for (const request of requests) {
-          await this.fileDelivery.sendRequestedFile(request);
-        }
-      } finally {
-        await this.fileDelivery.cleanupTurnTempFiles();
+    try {
+      await this.reactToMessage(completedTurn.userMessage, REACTION_DONE);
+      if (text) {
+        await this.sendReplyText(text, completedTurn.replyAsVoice);
+      } else if (requests.length === 0) {
+        await this.sendLongMessage("Codex turn completed.");
       }
+
+      if (skippedFileCount > 0) {
+        await this.sendLongMessage(`Skipped ${skippedFileCount} extra file request(s). Limit: ${MAX_FILE_SENDS_PER_TURN}.`);
+      }
+
+      for (const request of requests) {
+        await this.fileDelivery.sendRequestedFile(request);
+      }
+    } finally {
+      await this.fileDelivery.cleanupTurnTempFiles();
     }
   }
 
@@ -487,10 +431,7 @@ export class TelegramBridgeBot {
   }
 
   private async sendLongMessage(text: string): Promise<void> {
-    const limit = 3900;
-    for (let i = 0; i < text.length; i += limit) {
-      await this.bot.telegram.sendMessage(this.options.allowedUserId, text.slice(i, i + limit));
-    }
+    await sendLongTelegramMessage(this.bot.telegram, this.options.allowedUserId, text);
   }
 
   private startTyping(): void {
@@ -535,6 +476,19 @@ export class TelegramBridgeBot {
   }
 }
 
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function buildVoiceTranscriptInput(transcript: string): CodexInputItem[] {
+  return [
+    {
+      type: "text",
+      text: [
+        "An English Telegram voice message was transcribed locally with whisper.cpp.",
+        "Use the transcript below as the user's request and respond normally.",
+        "The bridge may send your final answer back to Telegram as a voice note.",
+        "",
+        "<transcript>",
+        transcript,
+        "</transcript>",
+      ].join("\n"),
+    },
+  ];
 }

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatError, makeTimestampedId, removeFileIfExists } from "./runtime.js";
 
 export type VoiceConfig = {
   whisperBin: string;
@@ -78,10 +78,7 @@ export class VoiceService {
     const directory = path.join(this.temporaryRoot, VOICE_DIR);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
 
-    const wavPath = path.join(
-      directory,
-      `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}-validate.wav`,
-    );
+    const wavPath = path.join(directory, `${makeTimestampedId("validate")}.wav`);
 
     try {
       await runCommand(
@@ -128,7 +125,7 @@ export class VoiceService {
     const directory = path.join(this.temporaryRoot, VOICE_DIR);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
 
-    const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}`;
+    const id = makeTimestampedId();
     const textPath = path.join(directory, `${id}.txt`);
     const aiffPath = path.join(directory, `${id}.aiff`);
     const oggPath = path.join(directory, `${id}.ogg`);
@@ -190,10 +187,7 @@ export class VoiceService {
     const directory = path.join(this.temporaryRoot, VOICE_DIR);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
 
-    const wavPath = path.join(
-      directory,
-      `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}-whisper.wav`,
-    );
+    const wavPath = path.join(directory, `${makeTimestampedId("whisper")}.wav`);
 
     await runCommand(
       this.config.ffmpegBin,
@@ -307,13 +301,5 @@ function normalizeSpeechText(value: string): string {
 }
 
 async function removeIfExists(filePath: string): Promise<void> {
-  try {
-    await fs.rm(filePath, { force: true });
-  } catch {
-    // Best-effort cleanup only.
-  }
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  await removeFileIfExists(filePath);
 }

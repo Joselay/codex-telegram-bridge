@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Telegraf } from "telegraf";
+import { formatError, removeFileIfExists } from "./runtime.js";
 import {
   expandHome,
   formatBytes,
@@ -9,6 +10,7 @@ import {
   isSensitivePath,
 } from "./telegram-files.js";
 import type { TelegramSendRequest, ValidatedFile } from "./telegram-files.js";
+import { sendLongTelegramMessage } from "./telegram-message.js";
 
 type TelegramApi = Telegraf["telegram"];
 
@@ -86,10 +88,7 @@ export class TelegramFileDelivery {
   }
 
   private async sendLongMessage(text: string): Promise<void> {
-    const limit = 3900;
-    for (let i = 0; i < text.length; i += limit) {
-      await this.options.telegram.sendMessage(this.options.allowedUserId, text.slice(i, i + limit));
-    }
+    await sendLongTelegramMessage(this.options.telegram, this.options.allowedUserId, text);
   }
 
   private async sendDocumentFile(file: ValidatedFile): Promise<void> {
@@ -175,11 +174,9 @@ export class TelegramFileDelivery {
 }
 
 async function removeIfExists(filePath: string): Promise<void> {
-  try {
-    await fs.rm(filePath, { force: true });
-  } catch (error) {
+  await removeFileIfExists(filePath, (error) => {
     console.error(`Temporary file cleanup error: ${formatError(error)}`);
-  }
+  });
 }
 
 async function removeEmptyParents(directory: string, stopDirectory: string): Promise<void> {
@@ -195,8 +192,4 @@ async function removeEmptyParents(directory: string, stopDirectory: string): Pro
 
     current = path.dirname(current);
   }
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

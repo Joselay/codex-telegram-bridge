@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import path from "node:path";
+import { makeTimestampedId } from "./runtime.js";
 
 export type TelegramSendMode = "document" | "photo" | "both";
 
@@ -27,7 +27,7 @@ export function buildSafeAttachmentName(originalName: string, mimeType: string |
   const parsed = path.parse(originalName);
   const base = parsed.name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "attachment";
   const ext = (parsed.ext || extensionForMimeType(mimeType)).replace(/[^a-zA-Z0-9.]/g, "");
-  return `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}-${base}${ext}`;
+  return `${makeTimestampedId(base)}${ext}`;
 }
 
 export function isImageAttachment(fileName: string, mimeType: string | undefined): boolean {
