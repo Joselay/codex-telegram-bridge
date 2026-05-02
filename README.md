@@ -50,11 +50,13 @@ Useful shell shortcut:
 
 ```zsh
 cdxyt() {
-  (cd /path/to/codex-telegram-bridge && npm run dev -- --cwd "$PWD" --yolo)
+  local cdxyt_cwd="$PWD"
+  (cd /path/to/codex-telegram-bridge && npm run dev -- --cwd "$cdxyt_cwd" --yolo "$@")
 }
 ```
 
-Then run `cdxyt` inside the project you want Codex to work on.
+Then run `cdxyt` inside the project you want Codex to work on. The name is
+shorthand for Codex YOLO Telegram.
 
 ## Build
 
