@@ -4,18 +4,17 @@ import { Telegraf } from "telegraf";
 import type { TelegramEmoji } from "telegraf/types";
 import type { CodexClient, CodexInputItem } from "./codex-client.js";
 import type { ReasoningLevel } from "./config.js";
+import { TelegramFileDelivery } from "./telegram-delivery.js";
 import {
   buildSafeAttachmentName,
-  expandHome,
   formatBytes,
   isImageAttachment,
-  isPathInside,
-  isSensitivePath,
   MAX_FILE_SENDS_PER_TURN,
 } from "./telegram-files.js";
-import type { SavedAttachment, TelegramSendRequest, ValidatedFile } from "./telegram-files.js";
-import { cleanTelegramText, extractFileSendRequests, readCompletedAgentMessage } from "./telegram-text.js";
-import type { AgentMessage } from "./telegram-text.js";
+import type { SavedAttachment } from "./telegram-files.js";
+import { extractFileSendRequests, readCompletedAgentMessage } from "./telegram-text.js";
+import { TelegramTurnState } from "./telegram-turn.js";
+import type { UserMessageRef } from "./telegram-turn.js";
 import type { VoiceService } from "./voice.js";
 
 type TelegramBotOptions = {
@@ -33,31 +32,27 @@ type TelegramBotOptions = {
   onStop: () => void;
 };
 
-type UserMessageRef = {
-  chatId: number | string;
-  messageId: number;
-};
-
 const REACTION_WORKING: TelegramEmoji = "👀";
 const REACTION_DONE: TelegramEmoji = "👌";
 const REACTION_ERROR: TelegramEmoji = "😢";
 const ATTACHMENT_DIR = "attachments";
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-const MAX_PHOTO_SEND_BYTES = 10 * 1024 * 1024;
 
 export class TelegramBridgeBot {
   private readonly bot: Telegraf;
-  private activeTurnId: string | undefined;
-  private activeUserMessage: UserMessageRef | undefined;
-  private busy = false;
+  private readonly fileDelivery: TelegramFileDelivery;
+  private readonly turn = new TelegramTurnState();
   private typingTimer: ReturnType<typeof setInterval> | undefined;
-  private readonly chunks: string[] = [];
-  private readonly agentMessages: AgentMessage[] = [];
-  private readonly turnTempFiles = new Set<string>();
-  private activeReplyAsVoice = false;
 
   constructor(private readonly options: TelegramBotOptions) {
     this.bot = new Telegraf(options.token);
+    this.fileDelivery = new TelegramFileDelivery({
+      telegram: this.bot.telegram,
+      allowedUserId: options.allowedUserId,
+      temporaryRoot: options.temporaryRoot,
+      fileSendRoots: options.fileSendRoots,
+      fileSendMaxBytes: options.fileSendMaxBytes,
+    });
     this.registerHandlers();
     this.options.codex.on("notification", (message) => {
       void this.handleCodexNotification(message as { method?: string; params?: unknown });
@@ -97,12 +92,12 @@ export class TelegramBridgeBot {
     });
 
     this.bot.command("interrupt", async (ctx) => {
-      if (!this.activeTurnId) {
+      if (!this.turn.turnId) {
         await ctx.reply("No active turn to interrupt.");
         return;
       }
 
-      await this.options.codex.interrupt(this.options.threadId, this.activeTurnId);
+      await this.options.codex.interrupt(this.options.threadId, this.turn.turnId);
       await ctx.reply("Interrupt requested.");
     });
 
@@ -191,7 +186,7 @@ export class TelegramBridgeBot {
     fileSize: number | undefined,
     caption: string | undefined,
   ): Promise<void> {
-    if (this.busy) {
+    if (this.turn.isBusy) {
       await this.replyBusy(userMessage, reply);
       return;
     }
@@ -207,7 +202,7 @@ export class TelegramBridgeBot {
 
     try {
       const saved = await this.downloadTelegramFile(fileId, fileName, mimeType);
-      this.turnTempFiles.add(saved.path);
+      this.fileDelivery.trackTurnTempFile(saved.path);
       const input = this.buildAttachmentInput(saved, caption);
       await this.startCodexTurn(userMessage, input, reply, true, true);
     } catch (error) {
@@ -222,7 +217,7 @@ export class TelegramBridgeBot {
     mimeType: string | undefined,
     fileSize: number | undefined,
   ): Promise<void> {
-    if (this.busy) {
+    if (this.turn.isBusy) {
       await this.replyBusy(userMessage, reply);
       return;
     }
@@ -242,7 +237,7 @@ export class TelegramBridgeBot {
       try {
         transcript = await this.options.voice.transcribe(saved.path);
       } finally {
-        await this.removeTemporaryFileIfManaged(saved.path);
+        await this.fileDelivery.removeTemporaryFileIfManaged(saved.path);
       }
 
       if (!transcript) {
@@ -315,7 +310,7 @@ export class TelegramBridgeBot {
     alreadyBusy = false,
     replyAsVoice = false,
   ): Promise<void> {
-    if (!alreadyBusy && this.busy) {
+    if (!alreadyBusy && this.turn.isBusy) {
       await this.replyBusy(userMessage, reply);
       return;
     }
@@ -325,7 +320,7 @@ export class TelegramBridgeBot {
     }
 
     if (alreadyBusy) {
-      this.activeReplyAsVoice = replyAsVoice;
+      this.turn.setReplyAsVoice(replyAsVoice);
     }
 
     if (!alreadyReacted) {
@@ -333,12 +328,13 @@ export class TelegramBridgeBot {
     }
 
     try {
-      this.activeTurnId = await this.options.codex.startTurn(
+      const turnId = await this.options.codex.startTurn(
         this.options.threadId,
         input,
         this.options.projectRoot,
         this.options.reasoningLevel,
       );
+      this.turn.setTurnId(turnId);
     } catch (error) {
       await this.failTurnSetup(userMessage, reply, "Codex error", error);
     }
@@ -350,13 +346,8 @@ export class TelegramBridgeBot {
   }
 
   private beginTurn(userMessage: UserMessageRef, replyAsVoice: boolean): void {
-    this.busy = true;
-    this.activeTurnId = undefined;
-    this.activeUserMessage = userMessage;
-    this.activeReplyAsVoice = replyAsVoice;
-    this.chunks.length = 0;
-    this.agentMessages.length = 0;
-    this.turnTempFiles.clear();
+    this.turn.begin(userMessage, replyAsVoice);
+    this.fileDelivery.clearTrackedTurnTempFiles();
     this.startTyping();
   }
 
@@ -366,14 +357,9 @@ export class TelegramBridgeBot {
     label: string,
     error: unknown,
   ): Promise<void> {
-    this.busy = false;
-    this.activeTurnId = undefined;
-    this.activeUserMessage = undefined;
-    this.activeReplyAsVoice = false;
-    this.chunks.length = 0;
-    this.agentMessages.length = 0;
+    this.turn.failSetup();
     this.stopTyping();
-    await this.cleanupTurnTempFiles();
+    await this.fileDelivery.cleanupTurnTempFiles();
     await this.reactToMessage(userMessage, REACTION_ERROR, true);
     await reply(`${label}: ${formatError(error)}`);
   }
@@ -412,7 +398,7 @@ export class TelegramBridgeBot {
     if (message.method === "item/agentMessage/delta") {
       const delta = (message.params as { delta?: unknown })?.delta;
       if (typeof delta === "string") {
-        this.chunks.push(delta);
+        this.turn.appendDelta(delta);
       }
       return;
     }
@@ -420,7 +406,7 @@ export class TelegramBridgeBot {
     if (message.method === "turn/started") {
       const turnId = (message.params as { turn?: { id?: unknown } })?.turn?.id;
       if (typeof turnId === "string") {
-        this.activeTurnId = turnId;
+        this.turn.setTurnId(turnId);
       }
       return;
     }
@@ -428,26 +414,19 @@ export class TelegramBridgeBot {
     if (message.method === "item/completed") {
       const agentMessage = readCompletedAgentMessage(message.params);
       if (agentMessage) {
-        this.agentMessages.push(agentMessage);
+        this.turn.appendAgentMessage(agentMessage);
       }
       return;
     }
 
     if (message.method === "turn/completed") {
-      this.busy = false;
-      this.activeTurnId = undefined;
-      const userMessage = this.activeUserMessage;
-      const replyAsVoice = this.activeReplyAsVoice;
-      this.activeUserMessage = undefined;
-      this.activeReplyAsVoice = false;
+      const completedTurn = this.turn.complete();
       this.stopTyping();
-      const { text, requests, skippedFileCount } = extractFileSendRequests(this.buildReplyText());
-      this.chunks.length = 0;
-      this.agentMessages.length = 0;
+      const { text, requests, skippedFileCount } = extractFileSendRequests(completedTurn.replyText);
       try {
-        await this.reactToMessage(userMessage, REACTION_DONE);
+        await this.reactToMessage(completedTurn.userMessage, REACTION_DONE);
         if (text) {
-          await this.sendReplyText(text, replyAsVoice);
+          await this.sendReplyText(text, completedTurn.replyAsVoice);
         } else if (requests.length === 0) {
           await this.sendLongMessage("Codex turn completed.");
         }
@@ -457,32 +436,12 @@ export class TelegramBridgeBot {
         }
 
         for (const request of requests) {
-          await this.sendRequestedFile(request);
+          await this.fileDelivery.sendRequestedFile(request);
         }
       } finally {
-        await this.cleanupTurnTempFiles();
+        await this.fileDelivery.cleanupTurnTempFiles();
       }
     }
-  }
-
-  private buildReplyText(): string {
-    const finalMessages = this.agentMessages
-      .filter((message) => message.phase === "final_answer")
-      .map((message) => message.text);
-
-    if (finalMessages.length > 0) {
-      return cleanTelegramText(finalMessages.join("\n\n"));
-    }
-
-    const unknownPhaseMessages = this.agentMessages
-      .filter((message) => !message.phase)
-      .map((message) => message.text);
-
-    if (unknownPhaseMessages.length > 0) {
-      return cleanTelegramText(unknownPhaseMessages.join("\n\n"));
-    }
-
-    return cleanTelegramText(this.chunks.join(""));
   }
 
   private statusText(): string {
@@ -495,7 +454,7 @@ export class TelegramBridgeBot {
       `File send roots: ${this.options.fileSendRoots.join(", ")}`,
       `File send max: ${formatBytes(this.options.fileSendMaxBytes)}`,
       ...this.options.voice.statusLines(),
-      `Busy: ${this.busy ? "yes" : "no"}`,
+      `Busy: ${this.turn.isBusy ? "yes" : "no"}`,
     ].join("\n");
   }
 
@@ -559,137 +518,6 @@ export class TelegramBridgeBot {
     }
   }
 
-  private async sendRequestedFile(request: TelegramSendRequest): Promise<void> {
-    let file: ValidatedFile;
-    try {
-      file = await this.validateRequestedFile(request.path);
-    } catch (error) {
-      await this.sendLongMessage(`Could not send ${request.mode} "${request.path}": ${formatError(error)}`);
-      return;
-    }
-
-    if (request.mode === "photo") {
-      try {
-        await this.sendPhotoFile(file);
-        await this.removeTemporaryFileIfManaged(file.path);
-      } catch (error) {
-        await this.sendLongMessage(`Could not send photo "${request.path}": ${formatError(error)}`);
-      }
-      return;
-    }
-
-    if (request.mode === "both") {
-      try {
-        await this.sendPhotoFile(file);
-      } catch (error) {
-        await this.sendLongMessage(`Could not send photo preview "${request.path}": ${formatError(error)}`);
-      }
-    }
-
-    try {
-      await this.sendDocumentFile(file);
-      await this.removeTemporaryFileIfManaged(file.path);
-    } catch (error) {
-      await this.sendLongMessage(`Could not send document "${request.path}": ${formatError(error)}`);
-    }
-  }
-
-  private async cleanupTurnTempFiles(): Promise<void> {
-    const filePaths = [...this.turnTempFiles];
-    this.turnTempFiles.clear();
-    await Promise.all(filePaths.map((filePath) => this.removeTemporaryFileIfManaged(filePath)));
-  }
-
-  private async removeTemporaryFileIfManaged(filePath: string): Promise<void> {
-    if (!isPathInside(path.resolve(filePath), path.resolve(this.options.temporaryRoot))) {
-      return;
-    }
-
-    await removeIfExists(filePath);
-    await removeEmptyParents(path.dirname(filePath), this.options.temporaryRoot);
-  }
-
-  private async sendDocumentFile(file: ValidatedFile): Promise<void> {
-    await this.bot.telegram.sendChatAction(this.options.allowedUserId, "upload_document");
-    await this.bot.telegram.sendDocument(
-      this.options.allowedUserId,
-      { source: file.path, filename: file.name },
-      { caption: file.name },
-    );
-  }
-
-  private async sendPhotoFile(file: ValidatedFile): Promise<void> {
-    if (!isImageAttachment(file.name, undefined)) {
-      throw new Error("sendPhoto supports image files only");
-    }
-
-    if (file.size > MAX_PHOTO_SEND_BYTES) {
-      throw new Error(`photo is too large for Telegram sendPhoto. Limit: ${formatBytes(MAX_PHOTO_SEND_BYTES)}`);
-    }
-
-    await this.bot.telegram.sendChatAction(this.options.allowedUserId, "upload_photo");
-    await this.bot.telegram.sendPhoto(
-      this.options.allowedUserId,
-      { source: file.path, filename: file.name },
-      { caption: file.name },
-    );
-  }
-
-  private async validateRequestedFile(requestedPath: string): Promise<ValidatedFile> {
-    const expandedPath = expandHome(requestedPath.trim());
-    if (!path.isAbsolute(expandedPath)) {
-      throw new Error("file marker must use an absolute path");
-    }
-
-    const absolutePath = path.resolve(expandedPath);
-    const realPath = await fs.realpath(absolutePath);
-    const stat = await fs.stat(realPath);
-
-    if (!stat.isFile()) {
-      throw new Error("path is not a regular file");
-    }
-
-    if (stat.size > this.options.fileSendMaxBytes) {
-      throw new Error(`file is too large. Limit: ${formatBytes(this.options.fileSendMaxBytes)}`);
-    }
-
-    if (!(await this.isInsideAllowedSendRoot(realPath))) {
-      throw new Error(`file is outside TELEGRAM_FILE_SEND_ROOTS (${this.options.fileSendRoots.join(", ")})`);
-    }
-
-    if (isSensitivePath(realPath)) {
-      throw new Error("file path looks sensitive and is blocked");
-    }
-
-    return {
-      path: realPath,
-      name: path.basename(realPath),
-      size: stat.size,
-    };
-  }
-
-  private async isInsideAllowedSendRoot(realPath: string): Promise<boolean> {
-    const realTemporaryRoot = await fs.realpath(this.options.temporaryRoot);
-    if (isPathInside(realPath, realTemporaryRoot)) {
-      return true;
-    }
-
-    for (const root of this.options.fileSendRoots) {
-      let realRoot: string;
-      try {
-        realRoot = await fs.realpath(root);
-      } catch {
-        continue;
-      }
-
-      if (isPathInside(realPath, realRoot)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
   private async reactToMessage(message: UserMessageRef | undefined, emoji: TelegramEmoji, isBig = false): Promise<void> {
     if (!message) {
       return;
@@ -709,27 +537,4 @@ export class TelegramBridgeBot {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-async function removeIfExists(filePath: string): Promise<void> {
-  try {
-    await fs.rm(filePath, { force: true });
-  } catch (error) {
-    console.error(`Temporary file cleanup error: ${formatError(error)}`);
-  }
-}
-
-async function removeEmptyParents(directory: string, stopDirectory: string): Promise<void> {
-  let current = path.resolve(directory);
-  const stop = path.resolve(stopDirectory);
-
-  while (current !== stop && isPathInside(current, stop)) {
-    try {
-      await fs.rmdir(current);
-    } catch {
-      return;
-    }
-
-    current = path.dirname(current);
-  }
 }
