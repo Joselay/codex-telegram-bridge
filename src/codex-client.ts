@@ -14,8 +14,8 @@ type PendingRequest = {
 
 export type CodexModel = {
   id: string;
-  defaultReasoningEffort?: ReasoningLevel;
-  supportedReasoningEfforts?: Array<{ reasoningEffort?: ReasoningLevel }>;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: Array<{ reasoningEffort?: string }>;
   inputModalities?: string[];
 };
 
@@ -23,10 +23,6 @@ export type CodexInputItem =
   | {
       type: "text";
       text: string;
-    }
-  | {
-      type: "image";
-      url: string;
     }
   | {
       type: "localImage";
@@ -187,8 +183,8 @@ function getThreadId(result: unknown): string {
   return threadId;
 }
 
-function toThreadConfig(reasoningLevel: ReasoningLevel): { model_reasoning_effort: ConfigReasoningLevel } | undefined {
-  return reasoningLevel === "none" ? undefined : { model_reasoning_effort: reasoningLevel };
+function toThreadConfig(reasoningLevel: ReasoningLevel): { model_reasoning_effort: ConfigReasoningLevel } {
+  return { model_reasoning_effort: reasoningLevel };
 }
 
 function isCodexModel(value: unknown): value is CodexModel {

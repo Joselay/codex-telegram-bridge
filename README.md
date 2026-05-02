@@ -12,8 +12,8 @@ This project is intentionally local-first:
 - The bridge does not persist its own session store.
 - Telegram attachments, voice scratch files, and Codex-created Telegram-only files use a per-run OS temp folder and are cleaned up.
 - `cdxyt` is yolo mode: `approvalPolicy: "never"` and `sandbox: "danger-full-access"`.
-- The default model is `gpt-5.5`, configurable with `CODEX_MODEL`.
-- The default reasoning level is `high`, configurable with `CODEX_REASONING_LEVEL`.
+- The Codex model is fixed to `gpt-5.5`.
+- The Codex reasoning level is fixed to `high`.
 
 ## Setup
 

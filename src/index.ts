@@ -112,7 +112,7 @@ async function validateModelConfig(
   const model = models.find((candidate) => candidate.id === modelId);
 
   if (!model) {
-    throw new Error(`Codex model "${modelId}" is not available. Check CODEX_MODEL or run Codex /model.`);
+    throw new Error(`Required Codex model "${modelId}" is not available. This bridge only runs with ${modelId}.`);
   }
 
   const supportedEfforts = readSupportedReasoningEfforts(model);
@@ -131,10 +131,10 @@ async function validateModelConfig(
   return model;
 }
 
-function readSupportedReasoningEfforts(model: CodexModel): ReasoningLevel[] {
+function readSupportedReasoningEfforts(model: CodexModel): string[] {
   const efforts = model.supportedReasoningEfforts
     ?.map((effort) => effort.reasoningEffort)
-    .filter((effort): effort is ReasoningLevel => typeof effort === "string");
+    .filter((effort): effort is string => typeof effort === "string");
 
   if (efforts?.length) {
     return efforts;

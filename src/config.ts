@@ -10,8 +10,8 @@ dotenv.config();
 type AppConfig = {
   cwd: string;
   yolo: boolean;
-  model: string;
-  reasoningLevel: ReasoningLevel;
+  model: "gpt-5.5";
+  reasoningLevel: "high";
   telegramBotToken: string;
   allowedTelegramUserId: number;
   telegramFileSendRoots: string[];
@@ -19,8 +19,11 @@ type AppConfig = {
   voice: VoiceConfig;
 };
 
-export type ReasoningLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
-export type ConfigReasoningLevel = Exclude<ReasoningLevel, "none">;
+export type ReasoningLevel = "high";
+export type ConfigReasoningLevel = ReasoningLevel;
+
+const FIXED_MODEL = "gpt-5.5";
+const FIXED_REASONING_LEVEL = "high";
 
 export function loadConfig(): AppConfig {
   const args = process.argv.slice(2);
@@ -44,8 +47,8 @@ export function loadConfig(): AppConfig {
   return {
     cwd: path.resolve(cwdArg),
     yolo,
-    model: process.env.CODEX_MODEL ?? "gpt-5.5",
-    reasoningLevel: readReasoningLevel(process.env.CODEX_REASONING_LEVEL ?? "high"),
+    model: FIXED_MODEL,
+    reasoningLevel: FIXED_REASONING_LEVEL,
     telegramBotToken,
     allowedTelegramUserId,
     telegramFileSendRoots: readPathList(process.env.TELEGRAM_FILE_SEND_ROOTS ?? os.homedir()),
@@ -82,14 +85,6 @@ function readVoiceConfig(): VoiceConfig {
       "TELEGRAM_VOICE_REPLY_MAX_CHARS",
     ),
   };
-}
-
-function readReasoningLevel(value: string): ReasoningLevel {
-  if (["none", "minimal", "low", "medium", "high", "xhigh"].includes(value)) {
-    return value as ReasoningLevel;
-  }
-
-  throw new Error(`Invalid CODEX_REASONING_LEVEL: ${value}`);
 }
 
 function readWhisperLanguage(value: string): string {
