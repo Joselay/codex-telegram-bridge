@@ -89,7 +89,7 @@ The only `.env` settings are the Telegram bot token and allowed Telegram user ID
 
 ```bash
 TELEGRAM_BOT_TOKEN=123456:replace_me
-TELEGRAM_ALLOWED_USER_ID=123456789
+TELEGRAM_ALLOWED_USER_ID=replace_me
 ```
 
 Other local settings are intentionally hardcoded for this personal bridge: file
