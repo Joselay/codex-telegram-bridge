@@ -1,10 +1,21 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Telegraf } from "telegraf";
 import type { TelegramEmoji } from "telegraf/types";
 import type { CodexClient, CodexInputItem } from "./codex-client.js";
 import type { ReasoningLevel } from "./config.js";
+import {
+  buildSafeAttachmentName,
+  expandHome,
+  formatBytes,
+  isImageAttachment,
+  isPathInside,
+  isSensitivePath,
+  MAX_FILE_SENDS_PER_TURN,
+} from "./telegram-files.js";
+import type { SavedAttachment, TelegramSendRequest, ValidatedFile } from "./telegram-files.js";
+import { cleanTelegramText, extractFileSendRequests, readCompletedAgentMessage } from "./telegram-text.js";
+import type { AgentMessage } from "./telegram-text.js";
 import type { VoiceService } from "./voice.js";
 
 type TelegramBotOptions = {
@@ -22,29 +33,9 @@ type TelegramBotOptions = {
   onStop: () => void;
 };
 
-type AgentMessagePhase = "commentary" | "final_answer";
-
-type AgentMessage = {
-  text: string;
-  phase?: AgentMessagePhase;
-};
-
 type UserMessageRef = {
   chatId: number | string;
   messageId: number;
-};
-
-type TelegramSendMode = "document" | "photo" | "both";
-
-type TelegramSendRequest = {
-  path: string;
-  mode: TelegramSendMode;
-};
-
-type ValidatedFile = {
-  path: string;
-  name: string;
-  size: number;
 };
 
 const REACTION_WORKING: TelegramEmoji = "👀";
@@ -52,9 +43,7 @@ const REACTION_DONE: TelegramEmoji = "👌";
 const REACTION_ERROR: TelegramEmoji = "😢";
 const ATTACHMENT_DIR = "attachments";
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-const MAX_FILE_SENDS_PER_TURN = 5;
 const MAX_PHOTO_SEND_BYTES = 10 * 1024 * 1024;
-const FILE_SEND_MARKER_PATTERN = /\[\[telegram_send_(file|document|photo|both):([^\]\r\n]+?)\]\]/g;
 
 export class TelegramBridgeBot {
   private readonly bot: Telegraf;
@@ -203,8 +192,7 @@ export class TelegramBridgeBot {
     caption: string | undefined,
   ): Promise<void> {
     if (this.busy) {
-      await this.reactToMessage(userMessage, REACTION_WORKING);
-      await reply("Codex is already working. Use /interrupt to stop the active turn.");
+      await this.replyBusy(userMessage, reply);
       return;
     }
 
@@ -214,14 +202,7 @@ export class TelegramBridgeBot {
       return;
     }
 
-    this.busy = true;
-    this.activeTurnId = undefined;
-    this.activeUserMessage = userMessage;
-    this.activeReplyAsVoice = false;
-    this.chunks.length = 0;
-    this.agentMessages.length = 0;
-    this.turnTempFiles.clear();
-    this.startTyping();
+    this.beginTurn(userMessage, false);
     await this.reactToMessage(userMessage, REACTION_WORKING, true);
 
     try {
@@ -230,13 +211,7 @@ export class TelegramBridgeBot {
       const input = this.buildAttachmentInput(saved, caption);
       await this.startCodexTurn(userMessage, input, reply, true, true);
     } catch (error) {
-      this.busy = false;
-      this.activeUserMessage = undefined;
-      this.activeReplyAsVoice = false;
-      this.stopTyping();
-      await this.cleanupTurnTempFiles();
-      await this.reactToMessage(userMessage, REACTION_ERROR, true);
-      await reply(`Attachment error: ${formatError(error)}`);
+      await this.failTurnSetup(userMessage, reply, "Attachment error", error);
     }
   }
 
@@ -248,8 +223,7 @@ export class TelegramBridgeBot {
     fileSize: number | undefined,
   ): Promise<void> {
     if (this.busy) {
-      await this.reactToMessage(userMessage, REACTION_WORKING);
-      await reply("Codex is already working. Use /interrupt to stop the active turn.");
+      await this.replyBusy(userMessage, reply);
       return;
     }
 
@@ -259,14 +233,7 @@ export class TelegramBridgeBot {
       return;
     }
 
-    this.busy = true;
-    this.activeTurnId = undefined;
-    this.activeUserMessage = userMessage;
-    this.activeReplyAsVoice = true;
-    this.chunks.length = 0;
-    this.agentMessages.length = 0;
-    this.turnTempFiles.clear();
-    this.startTyping();
+    this.beginTurn(userMessage, true);
     await this.reactToMessage(userMessage, REACTION_WORKING, true);
 
     try {
@@ -304,16 +271,7 @@ export class TelegramBridgeBot {
         this.options.voice.replyWithVoice,
       );
     } catch (error) {
-      this.busy = false;
-      this.activeTurnId = undefined;
-      this.activeUserMessage = undefined;
-      this.activeReplyAsVoice = false;
-      this.chunks.length = 0;
-      this.agentMessages.length = 0;
-      this.stopTyping();
-      await this.cleanupTurnTempFiles();
-      await this.reactToMessage(userMessage, REACTION_ERROR, true);
-      await reply(`Voice error: ${formatError(error)}`);
+      await this.failTurnSetup(userMessage, reply, "Voice error", error);
     }
   }
 
@@ -358,20 +316,12 @@ export class TelegramBridgeBot {
     replyAsVoice = false,
   ): Promise<void> {
     if (!alreadyBusy && this.busy) {
-      await this.reactToMessage(userMessage, REACTION_WORKING);
-      await reply("Codex is already working. Use /interrupt to stop the active turn.");
+      await this.replyBusy(userMessage, reply);
       return;
     }
 
     if (!alreadyBusy) {
-      this.busy = true;
-      this.activeTurnId = undefined;
-      this.activeUserMessage = userMessage;
-      this.activeReplyAsVoice = replyAsVoice;
-      this.chunks.length = 0;
-      this.agentMessages.length = 0;
-      this.turnTempFiles.clear();
-      this.startTyping();
+      this.beginTurn(userMessage, replyAsVoice);
     }
 
     if (alreadyBusy) {
@@ -390,14 +340,42 @@ export class TelegramBridgeBot {
         this.options.reasoningLevel,
       );
     } catch (error) {
-      this.busy = false;
-      this.activeUserMessage = undefined;
-      this.activeReplyAsVoice = false;
-      this.stopTyping();
-      await this.cleanupTurnTempFiles();
-      await this.reactToMessage(userMessage, REACTION_ERROR, true);
-      await reply(`Codex error: ${formatError(error)}`);
+      await this.failTurnSetup(userMessage, reply, "Codex error", error);
     }
+  }
+
+  private async replyBusy(userMessage: UserMessageRef, reply: (text: string) => Promise<unknown>): Promise<void> {
+    await this.reactToMessage(userMessage, REACTION_WORKING);
+    await reply("Codex is already working. Use /interrupt to stop the active turn.");
+  }
+
+  private beginTurn(userMessage: UserMessageRef, replyAsVoice: boolean): void {
+    this.busy = true;
+    this.activeTurnId = undefined;
+    this.activeUserMessage = userMessage;
+    this.activeReplyAsVoice = replyAsVoice;
+    this.chunks.length = 0;
+    this.agentMessages.length = 0;
+    this.turnTempFiles.clear();
+    this.startTyping();
+  }
+
+  private async failTurnSetup(
+    userMessage: UserMessageRef,
+    reply: (text: string) => Promise<unknown>,
+    label: string,
+    error: unknown,
+  ): Promise<void> {
+    this.busy = false;
+    this.activeTurnId = undefined;
+    this.activeUserMessage = undefined;
+    this.activeReplyAsVoice = false;
+    this.chunks.length = 0;
+    this.agentMessages.length = 0;
+    this.stopTyping();
+    await this.cleanupTurnTempFiles();
+    await this.reactToMessage(userMessage, REACTION_ERROR, true);
+    await reply(`${label}: ${formatError(error)}`);
   }
 
   private async downloadTelegramFile(
@@ -731,191 +709,6 @@ export class TelegramBridgeBot {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-type SavedAttachment = {
-  path: string;
-  originalName: string;
-  mimeType: string | undefined;
-  isImage: boolean;
-};
-
-function buildSafeAttachmentName(originalName: string, mimeType: string | undefined): string {
-  const parsed = path.parse(originalName);
-  const base = parsed.name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "attachment";
-  const ext = (parsed.ext || extensionForMimeType(mimeType)).replace(/[^a-zA-Z0-9.]/g, "");
-  return `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}-${base}${ext}`;
-}
-
-function extensionForMimeType(mimeType: string | undefined): string {
-  switch (mimeType) {
-    case "image/jpeg":
-      return ".jpg";
-    case "image/png":
-      return ".png";
-    case "image/webp":
-      return ".webp";
-    case "image/gif":
-      return ".gif";
-    case "application/pdf":
-      return ".pdf";
-    case "text/plain":
-      return ".txt";
-    case "audio/ogg":
-    case "audio/oga":
-      return ".ogg";
-    case "audio/mpeg":
-      return ".mp3";
-    case "audio/mp4":
-      return ".m4a";
-    case "audio/wav":
-    case "audio/x-wav":
-      return ".wav";
-    default:
-      return "";
-  }
-}
-
-function isImageAttachment(fileName: string, mimeType: string | undefined): boolean {
-  if (mimeType?.startsWith("image/")) {
-    return true;
-  }
-
-  return [".jpg", ".jpeg", ".png", ".webp", ".gif"].includes(path.extname(fileName).toLowerCase());
-}
-
-function formatBytes(bytes: number): string {
-  const megabytes = bytes / 1024 / 1024;
-  return `${megabytes.toFixed(megabytes >= 10 ? 0 : 1)} MB`;
-}
-
-function extractFileSendRequests(text: string): {
-  text: string;
-  requests: TelegramSendRequest[];
-  skippedFileCount: number;
-} {
-  const requests: TelegramSendRequest[] = [];
-  let skippedFileCount = 0;
-  const textWithoutMarkers = text.replace(FILE_SEND_MARKER_PATTERN, (_marker, markerMode: string, filePath: string) => {
-    if (requests.length < MAX_FILE_SENDS_PER_TURN) {
-      requests.push({
-        path: filePath.trim(),
-        mode: readTelegramSendMode(markerMode),
-      });
-    } else {
-      skippedFileCount += 1;
-    }
-
-    return "";
-  });
-
-  return {
-    text: cleanTelegramText(textWithoutMarkers),
-    requests,
-    skippedFileCount,
-  };
-}
-
-function readTelegramSendMode(value: string): TelegramSendMode {
-  switch (value) {
-    case "photo":
-      return "photo";
-    case "both":
-      return "both";
-    case "file":
-    case "document":
-    default:
-      return "document";
-  }
-}
-
-function expandHome(value: string): string {
-  if (value === "~") {
-    return process.env.HOME ?? value;
-  }
-
-  if (value.startsWith("~/")) {
-    const home = process.env.HOME;
-    return home ? path.join(home, value.slice(2)) : value;
-  }
-
-  return value;
-}
-
-function isPathInside(filePath: string, rootPath: string): boolean {
-  const relative = path.relative(rootPath, filePath);
-  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function isSensitivePath(filePath: string): boolean {
-  const normalized = filePath.split(path.sep).map((part) => part.toLowerCase());
-  const base = path.basename(filePath).toLowerCase();
-  const sensitiveDirectories = new Set([
-    ".ssh",
-    ".gnupg",
-    "keychains",
-    "cookies",
-    "login data",
-    "local state",
-    "profiles",
-  ]);
-  const sensitiveFiles = new Set([
-    ".env",
-    ".npmrc",
-    ".netrc",
-    ".git-credentials",
-    ".gitconfig",
-    "id_rsa",
-    "id_dsa",
-    "id_ecdsa",
-    "id_ed25519",
-    "known_hosts",
-    "authorized_keys",
-    "login.keychain-db",
-  ]);
-
-  if (normalized.some((part) => sensitiveDirectories.has(part))) {
-    return true;
-  }
-
-  if (sensitiveFiles.has(base)) {
-    return true;
-  }
-
-  if (/\b(secret|token|credential|password|passwd|apikey|api-key|private[-_.]?key)\b/i.test(base)) {
-    return true;
-  }
-
-  return [".pem", ".key", ".p12", ".pfx", ".keystore"].includes(path.extname(base));
-}
-
-function readCompletedAgentMessage(params: unknown): AgentMessage | undefined {
-  const item = (params as { item?: { type?: unknown; text?: unknown; phase?: unknown } })?.item;
-  if (item?.type !== "agentMessage" || typeof item.text !== "string" || !item.text.trim()) {
-    return undefined;
-  }
-
-  return {
-    text: item.text,
-    phase: readAgentMessagePhase(item.phase),
-  };
-}
-
-function readAgentMessagePhase(value: unknown): AgentMessagePhase | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-}
-
-function cleanTelegramText(text: string): string {
-  return text
-    .replace(/^```[^\n]*\n?/gm, "")
-    .replace(/^```\s*$/gm, "")
-    .replace(/\[([^\]]+)\]\((?:\/|file:\/\/)[^)]+\)/g, "$1")
-    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
-    .replace(/__([^_\n]+)__/g, "$1")
-    .replace(/`([^`\n]+)`/g, "$1")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
 }
 
 async function removeIfExists(filePath: string): Promise<void> {
