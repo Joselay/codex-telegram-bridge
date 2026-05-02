@@ -76,8 +76,8 @@ sent with `sendPhoto` may be compressed or resized by Telegram.
 The bridge validates every outbound file before upload:
 
 - the path must exist and be a regular file
-- the path must resolve inside `TELEGRAM_FILE_SEND_ROOTS`
-- the file must be under `TELEGRAM_FILE_SEND_MAX_MB`
+- the path must resolve inside your home directory or the bridge temp folder
+- the file must be under 50 MB
 - obvious secrets and credentials are blocked
 
 When Codex creates a file only for Telegram delivery, the bridge instructs it to
@@ -85,30 +85,20 @@ write that file under the per-run temp folder. Files uploaded from that folder a
 deleted after successful Telegram upload. Existing files outside the bridge temp
 folder are never auto-deleted after upload.
 
-Relevant optional `.env` settings:
+The only `.env` settings are the Telegram bot token and allowed Telegram user ID:
 
 ```bash
-# Comma-separated roots the bridge may upload from. Defaults to your home directory.
-TELEGRAM_FILE_SEND_ROOTS=~
-
-# Max outbound upload size in MB. Defaults to 50.
-TELEGRAM_FILE_SEND_MAX_MB=50
-
-# Local whisper.cpp binary and model for Telegram voice transcription.
-# Defaults to ~/whisper.cpp/build/bin/whisper-cli and ~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin.
-WHISPER_CPP_BIN=~/whisper.cpp/build/bin/whisper-cli
-WHISPER_CPP_MODEL=~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin
-WHISPER_CPP_LANGUAGE=en
-
-# Voice replies for Codex turns that started from Telegram voice messages.
-# Defaults: true and 3500.
-TELEGRAM_REPLY_WITH_VOICE=true
-TELEGRAM_VOICE_REPLY_MAX_CHARS=3500
-
-# Optional macOS TTS voice and ffmpeg path.
-TELEGRAM_TTS_VOICE=Samantha
-FFMPEG_BIN=/opt/homebrew/bin/ffmpeg
+TELEGRAM_BOT_TOKEN=123456:replace_me
+TELEGRAM_ALLOWED_USER_ID=123456789
 ```
+
+Other local settings are intentionally hardcoded for this personal bridge: file
+uploads are allowed from your home directory, outbound uploads are capped at
+50 MB, voice input is English-only through
+`~/whisper.cpp-build/bin/whisper-cli` with the model at
+`~/whisper-models/ggml-large-v3-turbo-q5_0.bin`, voice replies are enabled,
+voice replies are capped at 3500 characters, and `ffmpeg`/macOS `say` are
+discovered from the usual local paths.
 
 ## Warning
 

@@ -24,6 +24,11 @@ export type ConfigReasoningLevel = ReasoningLevel;
 
 const FIXED_MODEL = "gpt-5.5";
 const FIXED_REASONING_LEVEL = "high";
+const FILE_SEND_MAX_BYTES = 50 * 1024 * 1024;
+const REPLY_WITH_VOICE = true;
+const VOICE_REPLY_MAX_CHARS = 3500;
+const LOCAL_WHISPER_BIN = path.join(os.homedir(), "whisper.cpp-build", "bin", "whisper-cli");
+const LOCAL_WHISPER_MODEL = path.join(os.homedir(), "whisper-models", "ggml-large-v3-turbo-q5_0.bin");
 
 export function loadConfig(): AppConfig {
   const args = process.argv.slice(2);
@@ -51,49 +56,23 @@ export function loadConfig(): AppConfig {
     reasoningLevel: FIXED_REASONING_LEVEL,
     telegramBotToken,
     allowedTelegramUserId,
-    telegramFileSendRoots: readPathList(process.env.TELEGRAM_FILE_SEND_ROOTS ?? os.homedir()),
-    telegramFileSendMaxBytes: readMegabytes(process.env.TELEGRAM_FILE_SEND_MAX_MB ?? "50", "TELEGRAM_FILE_SEND_MAX_MB"),
+    telegramFileSendRoots: [os.homedir()],
+    telegramFileSendMaxBytes: FILE_SEND_MAX_BYTES,
     voice: readVoiceConfig(),
   };
 }
 
 function readVoiceConfig(): VoiceConfig {
-  const whisperRoot = path.join(os.homedir(), "whisper.cpp");
-  const defaultWhisperModel =
-    firstExistingPath([
-      path.join(whisperRoot, "models", "ggml-large-v3-turbo-q5_0.bin"),
-      path.join(whisperRoot, "models", "ggml-large-v3-turbo.bin"),
-      path.join(whisperRoot, "models", "ggml-medium.en.bin"),
-      path.join(whisperRoot, "models", "ggml-medium.en-q5_0.bin"),
-      path.join(whisperRoot, "models", "ggml-small.en.bin"),
-      path.join(whisperRoot, "models", "ggml-small.en-q5_1.bin"),
-      path.join(whisperRoot, "models", "ggml-base.en.bin"),
-    ]) ?? path.join(whisperRoot, "models", "ggml-large-v3-turbo-q5_0.bin");
-
   return {
-    whisperBin: resolveCommand(process.env.WHISPER_CPP_BIN ?? path.join(whisperRoot, "build", "bin", "whisper-cli")),
-    whisperModel: path.resolve(expandHome(process.env.WHISPER_CPP_MODEL ?? defaultWhisperModel)),
-    whisperLanguage: readWhisperLanguage(process.env.WHISPER_CPP_LANGUAGE ?? "en"),
-    ffmpegBin: expandHome(
-      process.env.FFMPEG_BIN ?? firstExistingPath(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) ?? "ffmpeg",
-    ),
-    ttsSayBin: expandHome(process.env.TELEGRAM_TTS_SAY_BIN ?? firstExistingPath(["/usr/bin/say"]) ?? "say"),
-    ttsVoice: readOptionalString(process.env.TELEGRAM_TTS_VOICE),
-    replyWithVoice: readBoolean(process.env.TELEGRAM_REPLY_WITH_VOICE ?? "true", "TELEGRAM_REPLY_WITH_VOICE"),
-    maxReplyChars: readPositiveInteger(
-      process.env.TELEGRAM_VOICE_REPLY_MAX_CHARS ?? "3500",
-      "TELEGRAM_VOICE_REPLY_MAX_CHARS",
-    ),
+    whisperBin: resolveCommand(LOCAL_WHISPER_BIN),
+    whisperModel: path.resolve(LOCAL_WHISPER_MODEL),
+    whisperLanguage: "en",
+    ffmpegBin: firstExistingPath(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) ?? "ffmpeg",
+    ttsSayBin: firstExistingPath(["/usr/bin/say"]) ?? "say",
+    ttsVoice: undefined,
+    replyWithVoice: REPLY_WITH_VOICE,
+    maxReplyChars: VOICE_REPLY_MAX_CHARS,
   };
-}
-
-function readWhisperLanguage(value: string): string {
-  const language = value.trim().toLowerCase();
-  if (language !== "en" && language !== "english") {
-    throw new Error("This bridge is configured for English-only voice input. Set WHISPER_CPP_LANGUAGE=en.");
-  }
-
-  return "en";
 }
 
 function readArg(args: string[], name: string): string | undefined {
@@ -105,74 +84,10 @@ function readArg(args: string[], name: string): string | undefined {
   return args[index + 1];
 }
 
-function readPathList(value: string): string[] {
-  const paths = value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map(expandHome)
-    .map((item) => path.resolve(item));
-
-  if (paths.length === 0) {
-    throw new Error("TELEGRAM_FILE_SEND_ROOTS must include at least one path");
-  }
-
-  return paths;
-}
-
-function expandHome(value: string): string {
-  if (value === "~") {
-    return os.homedir();
-  }
-
-  if (value.startsWith("~/")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-
-  return value;
-}
-
 function firstExistingPath(paths: string[]): string | undefined {
   return paths.find((candidate) => fs.existsSync(candidate));
 }
 
-function readOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function resolveCommand(value: string): string {
-  const expanded = expandHome(value);
-  return expanded.includes(path.sep) ? path.resolve(expanded) : expanded;
-}
-
-function readBoolean(value: string, name: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  if (["1", "true", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-
-  if (["0", "false", "no", "off"].includes(normalized)) {
-    return false;
-  }
-
-  throw new Error(`${name} must be true or false`);
-}
-
-function readPositiveInteger(value: string, name: string): number {
-  const integer = Number(value);
-  if (!Number.isSafeInteger(integer) || integer <= 0) {
-    throw new Error(`${name} must be a positive integer`);
-  }
-
-  return integer;
-}
-
-function readMegabytes(value: string, name: string): number {
-  const megabytes = Number(value);
-  if (!Number.isFinite(megabytes) || megabytes <= 0) {
-    throw new Error(`${name} must be a positive number`);
-  }
-
-  return Math.floor(megabytes * 1024 * 1024);
+  return value.includes(path.sep) ? path.resolve(value) : value;
 }

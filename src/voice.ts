@@ -29,13 +29,13 @@ export class VoiceService {
   ) {}
 
   async validate(): Promise<void> {
-    await assertFileReadable(this.config.whisperModel, "WHISPER_CPP_MODEL");
-    await assertCommandAvailable(this.config.whisperBin, "WHISPER_CPP_BIN", ["-h"]);
-    await assertCommandAvailable(this.config.ffmpegBin, "FFMPEG_BIN", ["-version"]);
+    await assertFileReadable(this.config.whisperModel, "Whisper model");
+    await assertCommandAvailable(this.config.whisperBin, "whisper.cpp binary", ["-h"]);
+    await assertCommandAvailable(this.config.ffmpegBin, "ffmpeg", ["-version"]);
     await this.validateWhisperModelLoads();
 
     if (this.config.replyWithVoice) {
-      await assertCommandAvailable(this.config.ttsSayBin, "TELEGRAM_TTS_SAY_BIN", ["-v", "?"]);
+      await assertCommandAvailable(this.config.ttsSayBin, "macOS say", ["-v", "?"]);
     }
   }
 

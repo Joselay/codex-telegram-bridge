@@ -136,7 +136,7 @@ export class TelegramFileDelivery {
     }
 
     if (!(await this.isInsideAllowedSendRoot(realPath))) {
-      throw new Error(`file is outside TELEGRAM_FILE_SEND_ROOTS (${this.options.fileSendRoots.join(", ")})`);
+      throw new Error(`file is outside allowed upload roots (${this.options.fileSendRoots.join(", ")})`);
     }
 
     if (isSensitivePath(realPath)) {
