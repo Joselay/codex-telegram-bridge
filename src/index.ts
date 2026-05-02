@@ -54,8 +54,8 @@ async function main(): Promise<void> {
   console.log("Codex app-server initialized.");
   const model = await validateModelConfig(codex, config.model, config.reasoningLevel);
 
-  console.log("Starting a new Codex thread...");
-  const threadId = await codex.startThread(
+  console.log("Starting a fresh Codex thread for this bridge launch...");
+  const threadId = await codex.startFreshThread(
     projectRoot,
     config.model,
     config.reasoningLevel,

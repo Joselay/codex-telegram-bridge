@@ -76,7 +76,7 @@ export class CodexClient extends EventEmitter {
     this.notify("initialized", {});
   }
 
-  async startThread(
+  async startFreshThread(
     cwd: string,
     model: string,
     reasoningLevel: ReasoningLevel,
@@ -90,17 +90,6 @@ export class CodexClient extends EventEmitter {
       sandbox: "danger-full-access",
       serviceName: "codex_telegram_bridge",
       developerInstructions,
-    });
-    return getThreadId(result);
-  }
-
-  async resumeThread(threadId: string, model: string, reasoningLevel: ReasoningLevel): Promise<string> {
-    const result = await this.request("thread/resume", {
-      threadId,
-      model,
-      config: toThreadConfig(reasoningLevel),
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
     });
     return getThreadId(result);
   }

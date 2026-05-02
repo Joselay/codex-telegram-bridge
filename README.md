@@ -8,6 +8,7 @@ This project is intentionally local-first:
 - This bridge spawns `codex app-server` over stdio.
 - Codex works on your local project folder.
 - Every bridge launch starts a fresh Codex thread, even for the same project.
+- There is intentionally no resume/session-restore path.
 - The bridge does not persist its own session store.
 - Telegram attachments, voice scratch files, and Codex-created Telegram-only files use a per-run OS temp folder and are cleaned up.
 - `cdxyt` is yolo mode: `approvalPolicy: "never"` and `sandbox: "danger-full-access"`.
