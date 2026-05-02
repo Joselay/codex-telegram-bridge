@@ -8,6 +8,8 @@ This project is intentionally local-first:
 - This bridge spawns `codex app-server` over stdio.
 - Codex works on your local project folder.
 - Every bridge launch starts a fresh Codex thread, even for the same project.
+- The bridge does not persist its own session store.
+- Telegram attachments, voice scratch files, and Codex-created Telegram-only files use a per-run OS temp folder and are cleaned up.
 - `cdxyt` is yolo mode: `approvalPolicy: "never"` and `sandbox: "danger-full-access"`.
 - The default model is `gpt-5.5`, configurable with `CODEX_MODEL`.
 - The default reasoning level is `high`, configurable with `CODEX_REASONING_LEVEL`.
@@ -51,9 +53,10 @@ from a voice message, the bridge sends Codex's final answer back as a Telegram
 voice note by default. Voice replies are generated locally with macOS `say` and
 encoded to Opus with `ffmpeg`.
 
-Photos and documents are downloaded locally and sent to Codex. Images are passed as
-Codex `localImage` inputs when the selected model supports image input; other files
-are saved locally and sent as file paths for Codex to inspect.
+Photos and documents are downloaded to the bridge temp folder and sent to Codex.
+Images are passed as Codex `localImage` inputs when the selected model supports
+image input; other files are sent as temp file paths for Codex to inspect. The
+downloaded files are deleted when the turn finishes or fails.
 
 Codex can also ask the bridge to send a local file back to Telegram. For example:
 
@@ -80,6 +83,11 @@ The bridge validates every outbound file before upload:
 - the path must resolve inside `TELEGRAM_FILE_SEND_ROOTS`
 - the file must be under `TELEGRAM_FILE_SEND_MAX_MB`
 - obvious secrets and credentials are blocked
+
+When Codex creates a file only for Telegram delivery, the bridge instructs it to
+write that file under the per-run temp folder. Files uploaded from that folder are
+deleted after successful Telegram upload. Existing files outside the bridge temp
+folder are never auto-deleted after upload.
 
 Relevant optional `.env` settings:
 

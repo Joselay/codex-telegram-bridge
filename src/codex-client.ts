@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import readline from "node:readline";
 import { EventEmitter } from "node:events";
@@ -37,13 +38,20 @@ export class CodexClient extends EventEmitter {
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
 
+  constructor(private readonly temporaryRoot: string) {
+    super();
+  }
+
   async start(): Promise<void> {
     const proc = spawn("codex", ["app-server"], {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.proc = proc;
 
-    const stderrLog = fs.createWriteStream("codex-app-server.log", { flags: "a", mode: 0o600 });
+    const stderrLog = fs.createWriteStream(path.join(this.temporaryRoot, "codex-app-server.log"), {
+      flags: "a",
+      mode: 0o600,
+    });
     stderrLog.write(`\n--- codex app-server started ${new Date().toISOString()} ---\n`);
     proc.stderr.pipe(stderrLog);
 

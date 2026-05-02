@@ -1,19 +1,24 @@
 #!/usr/bin/env node
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { CodexClient } from "./codex-client.js";
 import type { CodexModel } from "./codex-client.js";
 import type { ReasoningLevel } from "./config.js";
 import { loadConfig } from "./config.js";
 import { resolveProjectRoot } from "./project.js";
-import { SessionStore } from "./session-store.js";
 import { TelegramBridgeBot } from "./telegram-bot.js";
 import { VoiceService } from "./voice.js";
+
+let activeTemporaryRoot: string | undefined;
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const projectRoot = await resolveProjectRoot(config.cwd);
-  const store = new SessionStore(config.storePath);
-  const codex = new CodexClient();
-  const voice = new VoiceService(config.voice, projectRoot);
+  const temporaryRoot = await createTemporaryRoot();
+  activeTemporaryRoot = temporaryRoot;
+  const codex = new CodexClient(temporaryRoot);
+  const voice = new VoiceService(config.voice, temporaryRoot);
   let bot: TelegramBridgeBot | undefined;
   let stopping = false;
 
@@ -25,7 +30,9 @@ async function main(): Promise<void> {
     stopping = true;
     bot?.stop();
     codex.stop();
-    process.exit(exitCode);
+    void cleanupTemporaryRoot(temporaryRoot).finally(() => {
+      process.exit(exitCode);
+    });
   };
 
   codex.on("exit", ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => {
@@ -52,21 +59,15 @@ async function main(): Promise<void> {
     projectRoot,
     config.model,
     config.reasoningLevel,
-    buildDeveloperInstructions(),
+    buildDeveloperInstructions(temporaryRoot),
   );
   console.log(`Codex thread ready: ${threadId}`);
-
-  await store.set(projectRoot, {
-    threadId,
-    cwd: projectRoot,
-    mode: "yolo",
-    updatedAt: new Date().toISOString(),
-  });
 
   bot = new TelegramBridgeBot({
     token: config.telegramBotToken,
     allowedUserId: config.allowedTelegramUserId,
     projectRoot,
+    temporaryRoot,
     threadId,
     reasoningLevel: config.reasoningLevel,
     supportsImageInput: supportsImageInput(model),
@@ -85,6 +86,7 @@ async function main(): Promise<void> {
   console.log("Telegram bridge is running.");
   console.log(`Project: ${projectRoot}`);
   console.log(`Thread: ${threadId}`);
+  console.log(`Temporary files: ${temporaryRoot}`);
 
   process.once("SIGINT", () => {
     stop(0);
@@ -145,9 +147,30 @@ function supportsImageInput(model: CodexModel): boolean {
   return !model.inputModalities || model.inputModalities.includes("image");
 }
 
-function buildDeveloperInstructions(): string {
+async function createTemporaryRoot(): Promise<string> {
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-telegram-bridge-"));
+  await fs.chmod(temporaryRoot, 0o700);
+  return fs.realpath(temporaryRoot);
+}
+
+async function cleanupTemporaryRoot(temporaryRoot: string): Promise<void> {
+  try {
+    await fs.rm(temporaryRoot, { recursive: true, force: true });
+    if (activeTemporaryRoot === temporaryRoot) {
+      activeTemporaryRoot = undefined;
+    }
+  } catch (error) {
+    console.error(`Temporary cleanup error: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function buildDeveloperInstructions(temporaryRoot: string): string {
   return [
     "Telegram bridge file delivery instructions:",
+    `- Temporary Telegram delivery workspace: ${temporaryRoot}`,
+    "- For files you create only to send to Telegram, write them under the temporary workspace above.",
+    "- Do not put transient Telegram-only images, audio, or documents in the project folder.",
+    "- The bridge deletes files from the temporary workspace after successful Telegram upload.",
     "- When the user explicitly asks you to send, upload, or attach a local file in Telegram, find the file locally.",
     "- If one clear non-sensitive match should be sent as the original uncompressed file, include this exact marker in your final answer: [[telegram_send_file:/absolute/path/to/file]].",
     "- If the user asks to send an image as an inline Telegram photo, use: [[telegram_send_photo:/absolute/path/to/image]]. Telegram may compress or resize photos.",
@@ -158,7 +181,11 @@ function buildDeveloperInstructions(): string {
   ].join("\n");
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  if (activeTemporaryRoot) {
+    await cleanupTemporaryRoot(activeTemporaryRoot);
+  }
+
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 });

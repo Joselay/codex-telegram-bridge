@@ -20,15 +20,3 @@ export type JsonRpcNotification = {
 };
 
 export type JsonRpcMessage = JsonRpcResponse | JsonRpcNotification;
-
-export type ThreadRecord = {
-  threadId: string;
-  cwd: string;
-  mode: "yolo";
-  updatedAt: string;
-};
-
-export type StoreFile = {
-  version: 1;
-  projects: Record<string, ThreadRecord>;
-};

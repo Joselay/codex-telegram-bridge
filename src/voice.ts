@@ -20,12 +20,12 @@ export type SynthesizedVoice = {
   truncated: boolean;
 };
 
-const VOICE_DIR = ".codex-telegram-voice";
+const VOICE_DIR = "voice";
 
 export class VoiceService {
   constructor(
     private readonly config: VoiceConfig,
-    private readonly projectRoot: string,
+    private readonly temporaryRoot: string,
   ) {}
 
   async validate(): Promise<void> {
@@ -75,7 +75,7 @@ export class VoiceService {
   }
 
   async validateWhisperModelLoads(): Promise<void> {
-    const directory = path.join(this.projectRoot, VOICE_DIR);
+    const directory = path.join(this.temporaryRoot, VOICE_DIR);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
 
     const wavPath = path.join(
@@ -125,7 +125,7 @@ export class VoiceService {
   }
 
   async synthesizeTelegramVoice(text: string): Promise<SynthesizedVoice> {
-    const directory = path.join(this.projectRoot, VOICE_DIR);
+    const directory = path.join(this.temporaryRoot, VOICE_DIR);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
 
     const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}`;
@@ -187,7 +187,7 @@ export class VoiceService {
   }
 
   private async convertToWhisperWav(inputPath: string): Promise<string> {
-    const directory = path.join(this.projectRoot, VOICE_DIR);
+    const directory = path.join(this.temporaryRoot, VOICE_DIR);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
 
     const wavPath = path.join(
