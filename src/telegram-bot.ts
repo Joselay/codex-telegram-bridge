@@ -29,6 +29,12 @@ type TelegramBotOptions = {
 
 type ReplyFn = (text: string) => Promise<unknown>;
 
+type StartTurnOptions = {
+  alreadyReacted?: boolean;
+  turnAlreadyStarted?: boolean;
+  replyAsVoice?: boolean;
+};
+
 const REACTION_WORKING: TelegramEmoji = "👀";
 const REACTION_DONE: TelegramEmoji = "👌";
 const REACTION_ERROR: TelegramEmoji = "😢";
@@ -82,10 +88,7 @@ export class TelegramBridgeBot {
 
     this.bot.on("text", async (ctx) => {
       const text = ctx.message.text.trim();
-      const userMessage = {
-        chatId: ctx.chat.id,
-        messageId: ctx.message.message_id,
-      };
+      const userMessage = buildUserMessageRef(ctx.chat.id, ctx.message.message_id);
 
       if (!text) {
         return;
@@ -96,10 +99,7 @@ export class TelegramBridgeBot {
 
     this.bot.on("voice", async (ctx) => {
       const voice = ctx.message.voice;
-      const userMessage = {
-        chatId: ctx.chat.id,
-        messageId: ctx.message.message_id,
-      };
+      const userMessage = buildUserMessageRef(ctx.chat.id, ctx.message.message_id);
 
       await this.handleVoiceMessage(
         userMessage,
@@ -112,10 +112,7 @@ export class TelegramBridgeBot {
 
     this.bot.on("photo", async (ctx) => {
       const photo = ctx.message.photo.at(-1);
-      const userMessage = {
-        chatId: ctx.chat.id,
-        messageId: ctx.message.message_id,
-      };
+      const userMessage = buildUserMessageRef(ctx.chat.id, ctx.message.message_id);
 
       if (!photo) {
         return;
@@ -134,10 +131,7 @@ export class TelegramBridgeBot {
 
     this.bot.on("document", async (ctx) => {
       const document = ctx.message.document;
-      const userMessage = {
-        chatId: ctx.chat.id,
-        messageId: ctx.message.message_id,
-      };
+      const userMessage = buildUserMessageRef(ctx.chat.id, ctx.message.message_id);
 
       await this.handleAttachment(
         userMessage,
@@ -168,7 +162,10 @@ export class TelegramBridgeBot {
       const saved = await this.attachments.download(fileId, fileName, mimeType);
       this.fileDelivery.trackTurnTempFile(saved.path);
       const input = this.attachments.buildCodexInput(saved, caption);
-      await this.startCodexTurn(userMessage, input, reply, true, true);
+      await this.startCodexTurn(userMessage, input, reply, {
+        alreadyReacted: true,
+        turnAlreadyStarted: true,
+      });
     } catch (error) {
       await this.failTurnSetup(userMessage, reply, "Attachment error", error);
     }
@@ -202,9 +199,11 @@ export class TelegramBridgeBot {
         userMessage,
         buildVoiceTranscriptInput(transcript),
         reply,
-        true,
-        true,
-        this.options.voice.replyWithVoice,
+        {
+          alreadyReacted: true,
+          turnAlreadyStarted: true,
+          replyAsVoice: this.options.voice.replyWithVoice,
+        },
       );
     } catch (error) {
       await this.failTurnSetup(userMessage, reply, "Voice error", error);
@@ -238,20 +237,22 @@ export class TelegramBridgeBot {
     userMessage: UserMessageRef,
     input: CodexInputItem[],
     reply: ReplyFn,
-    alreadyReacted = false,
-    alreadyBusy = false,
-    replyAsVoice = false,
+    options: StartTurnOptions = {},
   ): Promise<void> {
-    if (!alreadyBusy && this.turn.isBusy) {
+    const alreadyReacted = options.alreadyReacted ?? false;
+    const turnAlreadyStarted = options.turnAlreadyStarted ?? false;
+    const replyAsVoice = options.replyAsVoice ?? false;
+
+    if (!turnAlreadyStarted && this.turn.isBusy) {
       await this.replyBusy(userMessage, reply);
       return;
     }
 
-    if (!alreadyBusy) {
+    if (!turnAlreadyStarted) {
       this.beginTurn(userMessage, replyAsVoice);
     }
 
-    if (alreadyBusy) {
+    if (turnAlreadyStarted) {
       this.turn.setReplyAsVoice(replyAsVoice);
     }
 
@@ -439,4 +440,11 @@ function buildVoiceTranscriptInput(transcript: string): CodexInputItem[] {
       ].join("\n"),
     },
   ];
+}
+
+function buildUserMessageRef(chatId: UserMessageRef["chatId"], messageId: number): UserMessageRef {
+  return {
+    chatId,
+    messageId,
+  };
 }

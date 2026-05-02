@@ -7,7 +7,7 @@ import type { VoiceConfig } from "./voice.js";
 
 dotenv.config();
 
-type AppConfig = {
+export type AppConfig = {
   cwd: string;
   yolo: boolean;
   model: "gpt-5.5";
@@ -35,14 +35,10 @@ export function loadConfig(): AppConfig {
   const cwdArg = readArg(args, "--cwd") ?? process.cwd();
   const yolo = args.includes("--yolo");
   const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
-  const allowedTelegramUserId = Number(process.env.TELEGRAM_ALLOWED_USER_ID);
+  const allowedTelegramUserId = readPositiveIntegerEnv("TELEGRAM_ALLOWED_USER_ID");
 
   if (!telegramBotToken) {
     throw new Error("Missing TELEGRAM_BOT_TOKEN in environment or .env");
-  }
-
-  if (!Number.isSafeInteger(allowedTelegramUserId) || allowedTelegramUserId <= 0) {
-    throw new Error("Missing or invalid TELEGRAM_ALLOWED_USER_ID in environment or .env");
   }
 
   if (!yolo) {
@@ -81,7 +77,23 @@ function readArg(args: string[], name: string): string | undefined {
     return undefined;
   }
 
-  return args[index + 1];
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`Missing value for ${name}`);
+  }
+
+  return value;
+}
+
+function readPositiveIntegerEnv(name: string): number {
+  const rawValue = process.env[name];
+  const value = Number(rawValue);
+
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`Missing or invalid ${name} in environment or .env`);
+  }
+
+  return value;
 }
 
 function firstExistingPath(paths: string[]): string | undefined {

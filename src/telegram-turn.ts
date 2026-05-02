@@ -24,11 +24,10 @@ export class TelegramTurnState {
   }
 
   begin(userMessage: UserMessageRef, replyAsVoice: boolean): void {
+    this.reset();
     this.busy = true;
     this.activeUserMessage = userMessage;
     this.activeReplyAsVoice = replyAsVoice;
-    this.chunks.length = 0;
-    this.agentMessages.length = 0;
   }
 
   setReplyAsVoice(replyAsVoice: boolean): void {
@@ -44,22 +43,14 @@ export class TelegramTurnState {
   }
 
   failSetup(): void {
-    this.busy = false;
-    this.activeUserMessage = undefined;
-    this.activeReplyAsVoice = false;
-    this.chunks.length = 0;
-    this.agentMessages.length = 0;
+    this.reset();
   }
 
   complete(): CompletedTurn {
-    this.busy = false;
     const userMessage = this.activeUserMessage;
     const replyAsVoice = this.activeReplyAsVoice;
     const replyText = this.buildReplyText();
-    this.activeUserMessage = undefined;
-    this.activeReplyAsVoice = false;
-    this.chunks.length = 0;
-    this.agentMessages.length = 0;
+    this.reset();
 
     return {
       userMessage,
@@ -86,5 +77,13 @@ export class TelegramTurnState {
     }
 
     return cleanTelegramText(this.chunks.join(""));
+  }
+
+  private reset(): void {
+    this.busy = false;
+    this.activeUserMessage = undefined;
+    this.activeReplyAsVoice = false;
+    this.chunks.length = 0;
+    this.agentMessages.length = 0;
   }
 }
