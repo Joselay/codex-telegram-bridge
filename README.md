@@ -56,9 +56,17 @@ I believe my CV is somewhere in Documents/cv, not sure. Please check and send it
 ```
 
 Codex searches locally. If it finds one clear safe match, it emits an internal
-marker and the bridge sends the file with Telegram `sendDocument`. If there are
-multiple plausible matches, Codex should list choices and wait for you to pick
-one.
+marker and the bridge sends the file. If there are multiple plausible matches,
+Codex should list choices and wait for you to pick one.
+
+Outbound markers supported by the bridge:
+
+- `[[telegram_send_file:/absolute/path]]` - send the original file with `sendDocument`
+- `[[telegram_send_photo:/absolute/path]]` - send an inline Telegram photo with `sendPhoto`
+- `[[telegram_send_both:/absolute/path]]` - send an inline photo preview, then the original file
+
+For images, `sendDocument` is the uncompressed/original option. Telegram photos
+sent with `sendPhoto` may be compressed or resized by Telegram.
 
 The bridge validates every outbound file before upload:
 

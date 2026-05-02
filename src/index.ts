@@ -142,7 +142,9 @@ function buildDeveloperInstructions(): string {
   return [
     "Telegram bridge file delivery instructions:",
     "- When the user explicitly asks you to send, upload, or attach a local file in Telegram, find the file locally.",
-    "- If one clear non-sensitive match should be sent, include this exact marker in your final answer: [[telegram_send_file:/absolute/path/to/file]].",
+    "- If one clear non-sensitive match should be sent as the original uncompressed file, include this exact marker in your final answer: [[telegram_send_file:/absolute/path/to/file]].",
+    "- If the user asks to send an image as an inline Telegram photo, use: [[telegram_send_photo:/absolute/path/to/image]]. Telegram may compress or resize photos.",
+    "- If the user asks for both a preview and the original image, use: [[telegram_send_both:/absolute/path/to/image]].",
     "- Use an absolute path in the marker. Do not put the marker in a code block.",
     "- If multiple plausible files are found, list numbered choices and wait for the user to pick one instead of sending automatically.",
     "- Never request sending secrets, credentials, private keys, token files, browser profiles, keychains, or .env files.",

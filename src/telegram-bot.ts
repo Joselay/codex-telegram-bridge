@@ -31,13 +31,27 @@ type UserMessageRef = {
   messageId: number;
 };
 
+type TelegramSendMode = "document" | "photo" | "both";
+
+type TelegramSendRequest = {
+  path: string;
+  mode: TelegramSendMode;
+};
+
+type ValidatedFile = {
+  path: string;
+  name: string;
+  size: number;
+};
+
 const REACTION_WORKING: TelegramEmoji = "👀";
 const REACTION_DONE: TelegramEmoji = "👌";
 const REACTION_ERROR: TelegramEmoji = "😢";
 const ATTACHMENT_DIR = ".codex-telegram-attachments";
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_FILE_SENDS_PER_TURN = 5;
-const FILE_SEND_MARKER_PATTERN = /\[\[telegram_send_file:([^\]\r\n]+?)\]\]/g;
+const MAX_PHOTO_SEND_BYTES = 10 * 1024 * 1024;
+const FILE_SEND_MARKER_PATTERN = /\[\[telegram_send_(file|document|photo|both):([^\]\r\n]+?)\]\]/g;
 
 export class TelegramBridgeBot {
   private readonly bot: Telegraf;
@@ -335,13 +349,13 @@ export class TelegramBridgeBot {
       const userMessage = this.activeUserMessage;
       this.activeUserMessage = undefined;
       this.stopTyping();
-      const { text, filePaths, skippedFileCount } = extractFileSendRequests(this.buildReplyText());
+      const { text, requests, skippedFileCount } = extractFileSendRequests(this.buildReplyText());
       this.chunks.length = 0;
       this.agentMessages.length = 0;
       await this.reactToMessage(userMessage, REACTION_DONE);
       if (text) {
         await this.sendLongMessage(text);
-      } else if (filePaths.length === 0) {
+      } else if (requests.length === 0) {
         await this.sendLongMessage("Codex turn completed.");
       }
 
@@ -349,8 +363,8 @@ export class TelegramBridgeBot {
         await this.sendLongMessage(`Skipped ${skippedFileCount} extra file request(s). Limit: ${MAX_FILE_SENDS_PER_TURN}.`);
       }
 
-      for (const filePath of filePaths) {
-        await this.sendRequestedFile(filePath);
+      for (const request of requests) {
+        await this.sendRequestedFile(request);
       }
     }
   }
@@ -419,21 +433,66 @@ export class TelegramBridgeBot {
     }
   }
 
-  private async sendRequestedFile(requestedPath: string): Promise<void> {
+  private async sendRequestedFile(request: TelegramSendRequest): Promise<void> {
+    let file: ValidatedFile;
     try {
-      const file = await this.validateRequestedFile(requestedPath);
-      await this.bot.telegram.sendChatAction(this.options.allowedUserId, "upload_document");
-      await this.bot.telegram.sendDocument(
-        this.options.allowedUserId,
-        { source: file.path, filename: file.name },
-        { caption: file.name },
-      );
+      file = await this.validateRequestedFile(request.path);
     } catch (error) {
-      await this.sendLongMessage(`Could not send file "${requestedPath}": ${formatError(error)}`);
+      await this.sendLongMessage(`Could not send ${request.mode} "${request.path}": ${formatError(error)}`);
+      return;
+    }
+
+    if (request.mode === "photo") {
+      try {
+        await this.sendPhotoFile(file);
+      } catch (error) {
+        await this.sendLongMessage(`Could not send photo "${request.path}": ${formatError(error)}`);
+      }
+      return;
+    }
+
+    if (request.mode === "both") {
+      try {
+        await this.sendPhotoFile(file);
+      } catch (error) {
+        await this.sendLongMessage(`Could not send photo preview "${request.path}": ${formatError(error)}`);
+      }
+    }
+
+    try {
+      await this.sendDocumentFile(file);
+    } catch (error) {
+      await this.sendLongMessage(`Could not send document "${request.path}": ${formatError(error)}`);
     }
   }
 
-  private async validateRequestedFile(requestedPath: string): Promise<{ path: string; name: string }> {
+  private async sendDocumentFile(file: ValidatedFile): Promise<void> {
+    await this.bot.telegram.sendChatAction(this.options.allowedUserId, "upload_document");
+    await this.bot.telegram.sendDocument(
+      this.options.allowedUserId,
+      { source: file.path, filename: file.name },
+      { caption: file.name },
+    );
+  }
+
+  private async sendPhotoFile(file: ValidatedFile): Promise<void> {
+    if (!isImageAttachment(file.name, undefined)) {
+      throw new Error("sendPhoto supports image files only");
+    }
+
+    if (file.size > MAX_PHOTO_SEND_BYTES) {
+      throw new Error(`photo is too large for Telegram sendPhoto. Limit: ${formatBytes(MAX_PHOTO_SEND_BYTES)}`);
+    }
+
+    await this.bot.telegram.sendChatAction(this.options.allowedUserId, "upload_photo");
+    await this.bot.telegram.sendPhoto(
+      this.options.allowedUserId,
+      { source: file.path, filename: file.name },
+      { caption: file.name },
+    );
+  }
+
+  private async validateRequestedFile(requestedPath: string): Promise<ValidatedFile> {
     const expandedPath = expandHome(requestedPath.trim());
     if (!path.isAbsolute(expandedPath)) {
       throw new Error("file marker must use an absolute path");
@@ -462,6 +521,7 @@ export class TelegramBridgeBot {
     return {
       path: realPath,
       name: path.basename(realPath),
+      size: stat.size,
     };
   }
 
@@ -549,12 +609,19 @@ function formatBytes(bytes: number): string {
   return `${megabytes.toFixed(megabytes >= 10 ? 0 : 1)} MB`;
 }
 
-function extractFileSendRequests(text: string): { text: string; filePaths: string[]; skippedFileCount: number } {
-  const filePaths: string[] = [];
+function extractFileSendRequests(text: string): {
+  text: string;
+  requests: TelegramSendRequest[];
+  skippedFileCount: number;
+} {
+  const requests: TelegramSendRequest[] = [];
   let skippedFileCount = 0;
-  const textWithoutMarkers = text.replace(FILE_SEND_MARKER_PATTERN, (_marker, filePath: string) => {
-    if (filePaths.length < MAX_FILE_SENDS_PER_TURN) {
-      filePaths.push(filePath.trim());
+  const textWithoutMarkers = text.replace(FILE_SEND_MARKER_PATTERN, (_marker, markerMode: string, filePath: string) => {
+    if (requests.length < MAX_FILE_SENDS_PER_TURN) {
+      requests.push({
+        path: filePath.trim(),
+        mode: readTelegramSendMode(markerMode),
+      });
     } else {
       skippedFileCount += 1;
     }
@@ -564,9 +631,22 @@ function extractFileSendRequests(text: string): { text: string; filePaths: strin
 
   return {
     text: cleanTelegramText(textWithoutMarkers),
-    filePaths,
+    requests,
     skippedFileCount,
   };
+}
+
+function readTelegramSendMode(value: string): TelegramSendMode {
+  switch (value) {
+    case "photo":
+      return "photo";
+    case "both":
+      return "both";
+    case "file":
+    case "document":
+    default:
+      return "document";
+  }
 }
 
 function expandHome(value: string): string {
