@@ -49,6 +49,34 @@ Photos and documents are downloaded locally and sent to Codex. Images are passed
 Codex `localImage` inputs when the selected model supports image input; other files
 are saved locally and sent as file paths for Codex to inspect.
 
+Codex can also ask the bridge to send a local file back to Telegram. For example:
+
+```text
+I believe my CV is somewhere in Documents/cv, not sure. Please check and send it here.
+```
+
+Codex searches locally. If it finds one clear safe match, it emits an internal
+marker and the bridge sends the file with Telegram `sendDocument`. If there are
+multiple plausible matches, Codex should list choices and wait for you to pick
+one.
+
+The bridge validates every outbound file before upload:
+
+- the path must exist and be a regular file
+- the path must resolve inside `TELEGRAM_FILE_SEND_ROOTS`
+- the file must be under `TELEGRAM_FILE_SEND_MAX_MB`
+- obvious secrets and credentials are blocked
+
+Relevant optional `.env` settings:
+
+```bash
+# Comma-separated roots the bridge may upload from. Defaults to your home directory.
+TELEGRAM_FILE_SEND_ROOTS=~
+
+# Max outbound upload size in MB. Defaults to 50.
+TELEGRAM_FILE_SEND_MAX_MB=50
+```
+
 ## Warning
 
 Yolo mode lets Codex edit files and run commands without approval. Keep this bridge local, use only your Telegram user ID, and do not expose Codex App Server to the network.

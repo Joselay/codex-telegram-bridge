@@ -68,7 +68,12 @@ export class CodexClient extends EventEmitter {
     this.notify("initialized", {});
   }
 
-  async startThread(cwd: string, model: string, reasoningLevel: ReasoningLevel): Promise<string> {
+  async startThread(
+    cwd: string,
+    model: string,
+    reasoningLevel: ReasoningLevel,
+    developerInstructions?: string,
+  ): Promise<string> {
     const result = await this.request("thread/start", {
       cwd,
       model,
@@ -76,6 +81,7 @@ export class CodexClient extends EventEmitter {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       serviceName: "codex_telegram_bridge",
+      developerInstructions,
     });
     return getThreadId(result);
   }

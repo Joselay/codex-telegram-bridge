@@ -13,6 +13,8 @@ type TelegramBotOptions = {
   threadId: string;
   reasoningLevel: ReasoningLevel;
   supportsImageInput: boolean;
+  fileSendRoots: string[];
+  fileSendMaxBytes: number;
   codex: CodexClient;
   onStop: () => void;
 };
@@ -34,6 +36,8 @@ const REACTION_DONE: TelegramEmoji = "👌";
 const REACTION_ERROR: TelegramEmoji = "😢";
 const ATTACHMENT_DIR = ".codex-telegram-attachments";
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_FILE_SENDS_PER_TURN = 5;
+const FILE_SEND_MARKER_PATTERN = /\[\[telegram_send_file:([^\]\r\n]+?)\]\]/g;
 
 export class TelegramBridgeBot {
   private readonly bot: Telegraf;
@@ -331,11 +335,23 @@ export class TelegramBridgeBot {
       const userMessage = this.activeUserMessage;
       this.activeUserMessage = undefined;
       this.stopTyping();
-      const text = this.buildReplyText();
+      const { text, filePaths, skippedFileCount } = extractFileSendRequests(this.buildReplyText());
       this.chunks.length = 0;
       this.agentMessages.length = 0;
       await this.reactToMessage(userMessage, REACTION_DONE);
-      await this.sendLongMessage(text || "Codex turn completed.");
+      if (text) {
+        await this.sendLongMessage(text);
+      } else if (filePaths.length === 0) {
+        await this.sendLongMessage("Codex turn completed.");
+      }
+
+      if (skippedFileCount > 0) {
+        await this.sendLongMessage(`Skipped ${skippedFileCount} extra file request(s). Limit: ${MAX_FILE_SENDS_PER_TURN}.`);
+      }
+
+      for (const filePath of filePaths) {
+        await this.sendRequestedFile(filePath);
+      }
     }
   }
 
@@ -365,6 +381,8 @@ export class TelegramBridgeBot {
       `Project: ${this.options.projectRoot}`,
       `Thread: ${this.options.threadId}`,
       `Reasoning level: ${this.options.reasoningLevel}`,
+      `File send roots: ${this.options.fileSendRoots.join(", ")}`,
+      `File send max: ${formatBytes(this.options.fileSendMaxBytes)}`,
       `Busy: ${this.busy ? "yes" : "no"}`,
     ].join("\n");
   }
@@ -399,6 +417,69 @@ export class TelegramBridgeBot {
     } catch (error) {
       console.error(`Telegram typing indicator error: ${formatError(error)}`);
     }
+  }
+
+  private async sendRequestedFile(requestedPath: string): Promise<void> {
+    try {
+      const file = await this.validateRequestedFile(requestedPath);
+      await this.bot.telegram.sendChatAction(this.options.allowedUserId, "upload_document");
+      await this.bot.telegram.sendDocument(
+        this.options.allowedUserId,
+        { source: file.path, filename: file.name },
+        { caption: file.name },
+      );
+    } catch (error) {
+      await this.sendLongMessage(`Could not send file "${requestedPath}": ${formatError(error)}`);
+    }
+  }
+
+  private async validateRequestedFile(requestedPath: string): Promise<{ path: string; name: string }> {
+    const expandedPath = expandHome(requestedPath.trim());
+    if (!path.isAbsolute(expandedPath)) {
+      throw new Error("file marker must use an absolute path");
+    }
+
+    const absolutePath = path.resolve(expandedPath);
+    const realPath = await fs.realpath(absolutePath);
+    const stat = await fs.stat(realPath);
+
+    if (!stat.isFile()) {
+      throw new Error("path is not a regular file");
+    }
+
+    if (stat.size > this.options.fileSendMaxBytes) {
+      throw new Error(`file is too large. Limit: ${formatBytes(this.options.fileSendMaxBytes)}`);
+    }
+
+    if (!(await this.isInsideAllowedSendRoot(realPath))) {
+      throw new Error(`file is outside TELEGRAM_FILE_SEND_ROOTS (${this.options.fileSendRoots.join(", ")})`);
+    }
+
+    if (isSensitivePath(realPath)) {
+      throw new Error("file path looks sensitive and is blocked");
+    }
+
+    return {
+      path: realPath,
+      name: path.basename(realPath),
+    };
+  }
+
+  private async isInsideAllowedSendRoot(realPath: string): Promise<boolean> {
+    for (const root of this.options.fileSendRoots) {
+      let realRoot: string;
+      try {
+        realRoot = await fs.realpath(root);
+      } catch {
+        continue;
+      }
+
+      if (isPathInside(realPath, realRoot)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private async reactToMessage(message: UserMessageRef | undefined, emoji: TelegramEmoji, isBig = false): Promise<void> {
@@ -466,6 +547,86 @@ function isImageAttachment(fileName: string, mimeType: string | undefined): bool
 function formatBytes(bytes: number): string {
   const megabytes = bytes / 1024 / 1024;
   return `${megabytes.toFixed(megabytes >= 10 ? 0 : 1)} MB`;
+}
+
+function extractFileSendRequests(text: string): { text: string; filePaths: string[]; skippedFileCount: number } {
+  const filePaths: string[] = [];
+  let skippedFileCount = 0;
+  const textWithoutMarkers = text.replace(FILE_SEND_MARKER_PATTERN, (_marker, filePath: string) => {
+    if (filePaths.length < MAX_FILE_SENDS_PER_TURN) {
+      filePaths.push(filePath.trim());
+    } else {
+      skippedFileCount += 1;
+    }
+
+    return "";
+  });
+
+  return {
+    text: cleanTelegramText(textWithoutMarkers),
+    filePaths,
+    skippedFileCount,
+  };
+}
+
+function expandHome(value: string): string {
+  if (value === "~") {
+    return process.env.HOME ?? value;
+  }
+
+  if (value.startsWith("~/")) {
+    const home = process.env.HOME;
+    return home ? path.join(home, value.slice(2)) : value;
+  }
+
+  return value;
+}
+
+function isPathInside(filePath: string, rootPath: string): boolean {
+  const relative = path.relative(rootPath, filePath);
+  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isSensitivePath(filePath: string): boolean {
+  const normalized = filePath.split(path.sep).map((part) => part.toLowerCase());
+  const base = path.basename(filePath).toLowerCase();
+  const sensitiveDirectories = new Set([
+    ".ssh",
+    ".gnupg",
+    "keychains",
+    "cookies",
+    "login data",
+    "local state",
+    "profiles",
+  ]);
+  const sensitiveFiles = new Set([
+    ".env",
+    ".npmrc",
+    ".netrc",
+    ".git-credentials",
+    ".gitconfig",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "known_hosts",
+    "authorized_keys",
+    "login.keychain-db",
+  ]);
+
+  if (normalized.some((part) => sensitiveDirectories.has(part))) {
+    return true;
+  }
+
+  if (sensitiveFiles.has(base)) {
+    return true;
+  }
+
+  if (/\b(secret|token|credential|password|passwd|apikey|api-key|private[-_.]?key)\b/i.test(base)) {
+    return true;
+  }
+
+  return [".pem", ".key", ".p12", ".pfx", ".keystore"].includes(path.extname(base));
 }
 
 function readCompletedAgentMessage(params: unknown): AgentMessage | undefined {

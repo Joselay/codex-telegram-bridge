@@ -1,5 +1,6 @@
 import path from "node:path";
 import process from "node:process";
+import os from "node:os";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -12,6 +13,8 @@ export type AppConfig = {
   storePath: string;
   telegramBotToken: string;
   allowedTelegramUserId: number;
+  telegramFileSendRoots: string[];
+  telegramFileSendMaxBytes: number;
 };
 
 export type ReasoningLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -44,6 +47,8 @@ export function loadConfig(): AppConfig {
     storePath: path.resolve(process.env.CODEX_TELEGRAM_STORE ?? ".codex-telegram-store.json"),
     telegramBotToken,
     allowedTelegramUserId,
+    telegramFileSendRoots: readPathList(process.env.TELEGRAM_FILE_SEND_ROOTS ?? os.homedir()),
+    telegramFileSendMaxBytes: readMegabytes(process.env.TELEGRAM_FILE_SEND_MAX_MB ?? "50", "TELEGRAM_FILE_SEND_MAX_MB"),
   };
 }
 
@@ -62,4 +67,40 @@ function readArg(args: string[], name: string): string | undefined {
   }
 
   return args[index + 1];
+}
+
+function readPathList(value: string): string[] {
+  const paths = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map(expandHome)
+    .map((item) => path.resolve(item));
+
+  if (paths.length === 0) {
+    throw new Error("TELEGRAM_FILE_SEND_ROOTS must include at least one path");
+  }
+
+  return paths;
+}
+
+function expandHome(value: string): string {
+  if (value === "~") {
+    return os.homedir();
+  }
+
+  if (value.startsWith("~/")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+
+  return value;
+}
+
+function readMegabytes(value: string, name: string): number {
+  const megabytes = Number(value);
+  if (!Number.isFinite(megabytes) || megabytes <= 0) {
+    throw new Error(`${name} must be a positive number`);
+  }
+
+  return Math.floor(megabytes * 1024 * 1024);
 }
