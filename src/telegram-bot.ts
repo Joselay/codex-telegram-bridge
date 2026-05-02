@@ -5,6 +5,7 @@ import { Telegraf } from "telegraf";
 import type { TelegramEmoji } from "telegraf/types";
 import type { CodexClient, CodexInputItem } from "./codex-client.js";
 import type { ReasoningLevel } from "./config.js";
+import type { VoiceService } from "./voice.js";
 
 type TelegramBotOptions = {
   token: string;
@@ -15,6 +16,7 @@ type TelegramBotOptions = {
   supportsImageInput: boolean;
   fileSendRoots: string[];
   fileSendMaxBytes: number;
+  voice: VoiceService;
   codex: CodexClient;
   onStop: () => void;
 };
@@ -61,6 +63,7 @@ export class TelegramBridgeBot {
   private typingTimer: ReturnType<typeof setInterval> | undefined;
   private readonly chunks: string[] = [];
   private readonly agentMessages: AgentMessage[] = [];
+  private activeReplyAsVoice = false;
 
   constructor(private readonly options: TelegramBotOptions) {
     this.bot = new Telegraf(options.token);
@@ -131,6 +134,22 @@ export class TelegramBridgeBot {
       await this.startCodexTurn(userMessage, [{ type: "text", text }], ctx.reply.bind(ctx));
     });
 
+    this.bot.on("voice", async (ctx) => {
+      const voice = ctx.message.voice;
+      const userMessage = {
+        chatId: ctx.chat.id,
+        messageId: ctx.message.message_id,
+      };
+
+      await this.handleVoiceMessage(
+        userMessage,
+        ctx.reply.bind(ctx),
+        voice.file_id,
+        voice.mime_type,
+        voice.file_size,
+      );
+    });
+
     this.bot.on("photo", async (ctx) => {
       const photo = ctx.message.photo.at(-1);
       const userMessage = {
@@ -196,6 +215,7 @@ export class TelegramBridgeBot {
     this.busy = true;
     this.activeTurnId = undefined;
     this.activeUserMessage = userMessage;
+    this.activeReplyAsVoice = false;
     this.chunks.length = 0;
     this.agentMessages.length = 0;
     this.startTyping();
@@ -208,9 +228,80 @@ export class TelegramBridgeBot {
     } catch (error) {
       this.busy = false;
       this.activeUserMessage = undefined;
+      this.activeReplyAsVoice = false;
       this.stopTyping();
       await this.reactToMessage(userMessage, REACTION_ERROR, true);
       await reply(`Attachment error: ${formatError(error)}`);
+    }
+  }
+
+  private async handleVoiceMessage(
+    userMessage: UserMessageRef,
+    reply: (text: string) => Promise<unknown>,
+    fileId: string,
+    mimeType: string | undefined,
+    fileSize: number | undefined,
+  ): Promise<void> {
+    if (this.busy) {
+      await this.reactToMessage(userMessage, REACTION_WORKING);
+      await reply("Codex is already working. Use /interrupt to stop the active turn.");
+      return;
+    }
+
+    if (fileSize && fileSize > MAX_ATTACHMENT_BYTES) {
+      await this.reactToMessage(userMessage, REACTION_ERROR);
+      await reply(`Voice message is too large. Limit: ${formatBytes(MAX_ATTACHMENT_BYTES)}.`);
+      return;
+    }
+
+    this.busy = true;
+    this.activeTurnId = undefined;
+    this.activeUserMessage = userMessage;
+    this.activeReplyAsVoice = true;
+    this.chunks.length = 0;
+    this.agentMessages.length = 0;
+    this.startTyping();
+    await this.reactToMessage(userMessage, REACTION_WORKING, true);
+
+    try {
+      const saved = await this.downloadTelegramFile(fileId, "telegram-voice.ogg", mimeType ?? "audio/ogg");
+      const transcript = await this.options.voice.transcribe(saved.path);
+
+      if (!transcript) {
+        throw new Error("whisper.cpp returned an empty transcript");
+      }
+
+      await this.startCodexTurn(
+        userMessage,
+        [
+          {
+            type: "text",
+            text: [
+              "An English Telegram voice message was transcribed locally with whisper.cpp.",
+              "Use the transcript below as the user's request and respond normally.",
+              "The bridge may send your final answer back to Telegram as a voice note.",
+              "",
+              "<transcript>",
+              transcript,
+              "</transcript>",
+            ].join("\n"),
+          },
+        ],
+        reply,
+        true,
+        true,
+        this.options.voice.replyWithVoice,
+      );
+    } catch (error) {
+      this.busy = false;
+      this.activeTurnId = undefined;
+      this.activeUserMessage = undefined;
+      this.activeReplyAsVoice = false;
+      this.chunks.length = 0;
+      this.agentMessages.length = 0;
+      this.stopTyping();
+      await this.reactToMessage(userMessage, REACTION_ERROR, true);
+      await reply(`Voice error: ${formatError(error)}`);
     }
   }
 
@@ -252,6 +343,7 @@ export class TelegramBridgeBot {
     reply: (text: string) => Promise<unknown>,
     alreadyReacted = false,
     alreadyBusy = false,
+    replyAsVoice = false,
   ): Promise<void> {
     if (!alreadyBusy && this.busy) {
       await this.reactToMessage(userMessage, REACTION_WORKING);
@@ -263,9 +355,14 @@ export class TelegramBridgeBot {
       this.busy = true;
       this.activeTurnId = undefined;
       this.activeUserMessage = userMessage;
+      this.activeReplyAsVoice = replyAsVoice;
       this.chunks.length = 0;
       this.agentMessages.length = 0;
       this.startTyping();
+    }
+
+    if (alreadyBusy) {
+      this.activeReplyAsVoice = replyAsVoice;
     }
 
     if (!alreadyReacted) {
@@ -282,6 +379,7 @@ export class TelegramBridgeBot {
     } catch (error) {
       this.busy = false;
       this.activeUserMessage = undefined;
+      this.activeReplyAsVoice = false;
       this.stopTyping();
       await this.reactToMessage(userMessage, REACTION_ERROR, true);
       await reply(`Codex error: ${formatError(error)}`);
@@ -347,14 +445,16 @@ export class TelegramBridgeBot {
       this.busy = false;
       this.activeTurnId = undefined;
       const userMessage = this.activeUserMessage;
+      const replyAsVoice = this.activeReplyAsVoice;
       this.activeUserMessage = undefined;
+      this.activeReplyAsVoice = false;
       this.stopTyping();
       const { text, requests, skippedFileCount } = extractFileSendRequests(this.buildReplyText());
       this.chunks.length = 0;
       this.agentMessages.length = 0;
       await this.reactToMessage(userMessage, REACTION_DONE);
       if (text) {
-        await this.sendLongMessage(text);
+        await this.sendReplyText(text, replyAsVoice);
       } else if (requests.length === 0) {
         await this.sendLongMessage("Codex turn completed.");
       }
@@ -397,8 +497,37 @@ export class TelegramBridgeBot {
       `Reasoning level: ${this.options.reasoningLevel}`,
       `File send roots: ${this.options.fileSendRoots.join(", ")}`,
       `File send max: ${formatBytes(this.options.fileSendMaxBytes)}`,
+      ...this.options.voice.statusLines(),
       `Busy: ${this.busy ? "yes" : "no"}`,
     ].join("\n");
+  }
+
+  private async sendReplyText(text: string, replyAsVoice: boolean): Promise<void> {
+    if (!replyAsVoice) {
+      await this.sendLongMessage(text);
+      return;
+    }
+
+    try {
+      await this.sendVoiceReply(text);
+    } catch (error) {
+      await this.sendLongMessage(`Voice reply error: ${formatError(error)}\n\n${text}`);
+    }
+  }
+
+  private async sendVoiceReply(text: string): Promise<void> {
+    await this.bot.telegram.sendChatAction(this.options.allowedUserId, "record_voice");
+    const voice = await this.options.voice.synthesizeTelegramVoice(text);
+    try {
+      await this.bot.telegram.sendChatAction(this.options.allowedUserId, "upload_voice");
+      await this.bot.telegram.sendVoice(this.options.allowedUserId, { source: voice.path });
+    } finally {
+      await this.options.voice.removeSynthesizedVoice(voice);
+    }
+
+    if (voice.truncated) {
+      await this.sendLongMessage(`Voice reply was truncated to ${voice.text.length} characters.\n\n${text}`);
+    }
   }
 
   private async sendLongMessage(text: string): Promise<void> {
@@ -591,6 +720,16 @@ function extensionForMimeType(mimeType: string | undefined): string {
       return ".pdf";
     case "text/plain":
       return ".txt";
+    case "audio/ogg":
+    case "audio/oga":
+      return ".ogg";
+    case "audio/mpeg":
+      return ".mp3";
+    case "audio/mp4":
+      return ".m4a";
+    case "audio/wav":
+    case "audio/x-wav":
+      return ".wav";
     default:
       return "";
   }

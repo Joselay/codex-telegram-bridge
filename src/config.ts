@@ -1,7 +1,9 @@
 import path from "node:path";
 import process from "node:process";
 import os from "node:os";
+import fs from "node:fs";
 import dotenv from "dotenv";
+import type { VoiceConfig } from "./voice.js";
 
 dotenv.config();
 
@@ -15,6 +17,7 @@ export type AppConfig = {
   allowedTelegramUserId: number;
   telegramFileSendRoots: string[];
   telegramFileSendMaxBytes: number;
+  voice: VoiceConfig;
 };
 
 export type ReasoningLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -49,6 +52,37 @@ export function loadConfig(): AppConfig {
     allowedTelegramUserId,
     telegramFileSendRoots: readPathList(process.env.TELEGRAM_FILE_SEND_ROOTS ?? os.homedir()),
     telegramFileSendMaxBytes: readMegabytes(process.env.TELEGRAM_FILE_SEND_MAX_MB ?? "50", "TELEGRAM_FILE_SEND_MAX_MB"),
+    voice: readVoiceConfig(),
+  };
+}
+
+function readVoiceConfig(): VoiceConfig {
+  const whisperRoot = path.join(os.homedir(), "whisper.cpp");
+  const defaultWhisperModel =
+    firstExistingPath([
+      path.join(whisperRoot, "models", "ggml-large-v3-turbo-q5_0.bin"),
+      path.join(whisperRoot, "models", "ggml-large-v3-turbo.bin"),
+      path.join(whisperRoot, "models", "ggml-medium.en.bin"),
+      path.join(whisperRoot, "models", "ggml-medium.en-q5_0.bin"),
+      path.join(whisperRoot, "models", "ggml-small.en.bin"),
+      path.join(whisperRoot, "models", "ggml-small.en-q5_1.bin"),
+      path.join(whisperRoot, "models", "ggml-base.en.bin"),
+    ]) ?? path.join(whisperRoot, "models", "ggml-large-v3-turbo-q5_0.bin");
+
+  return {
+    whisperBin: resolveCommand(process.env.WHISPER_CPP_BIN ?? path.join(whisperRoot, "build", "bin", "whisper-cli")),
+    whisperModel: path.resolve(expandHome(process.env.WHISPER_CPP_MODEL ?? defaultWhisperModel)),
+    whisperLanguage: readWhisperLanguage(process.env.WHISPER_CPP_LANGUAGE ?? "en"),
+    ffmpegBin: expandHome(
+      process.env.FFMPEG_BIN ?? firstExistingPath(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) ?? "ffmpeg",
+    ),
+    ttsSayBin: expandHome(process.env.TELEGRAM_TTS_SAY_BIN ?? firstExistingPath(["/usr/bin/say"]) ?? "say"),
+    ttsVoice: readOptionalString(process.env.TELEGRAM_TTS_VOICE),
+    replyWithVoice: readBoolean(process.env.TELEGRAM_REPLY_WITH_VOICE ?? "true", "TELEGRAM_REPLY_WITH_VOICE"),
+    maxReplyChars: readPositiveInteger(
+      process.env.TELEGRAM_VOICE_REPLY_MAX_CHARS ?? "3500",
+      "TELEGRAM_VOICE_REPLY_MAX_CHARS",
+    ),
   };
 }
 
@@ -58,6 +92,15 @@ function readReasoningLevel(value: string): ReasoningLevel {
   }
 
   throw new Error(`Invalid CODEX_REASONING_LEVEL: ${value}`);
+}
+
+function readWhisperLanguage(value: string): string {
+  const language = value.trim().toLowerCase();
+  if (language !== "en" && language !== "english") {
+    throw new Error("This bridge is configured for English-only voice input. Set WHISPER_CPP_LANGUAGE=en.");
+  }
+
+  return "en";
 }
 
 function readArg(args: string[], name: string): string | undefined {
@@ -94,6 +137,42 @@ function expandHome(value: string): string {
   }
 
   return value;
+}
+
+function firstExistingPath(paths: string[]): string | undefined {
+  return paths.find((candidate) => fs.existsSync(candidate));
+}
+
+function readOptionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function resolveCommand(value: string): string {
+  const expanded = expandHome(value);
+  return expanded.includes(path.sep) ? path.resolve(expanded) : expanded;
+}
+
+function readBoolean(value: string, name: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  throw new Error(`${name} must be true or false`);
+}
+
+function readPositiveInteger(value: string, name: string): number {
+  const integer = Number(value);
+  if (!Number.isSafeInteger(integer) || integer <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+
+  return integer;
 }
 
 function readMegabytes(value: string, name: string): number {

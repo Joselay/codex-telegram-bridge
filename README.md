@@ -45,6 +45,12 @@ cdxyt() {
 
 Any normal text message is sent to the active Codex thread.
 
+English Telegram voice messages are downloaded locally, transcribed with
+`whisper.cpp`, and sent to the active Codex thread as text. When a turn starts
+from a voice message, the bridge sends Codex's final answer back as a Telegram
+voice note by default. Voice replies are generated locally with macOS `say` and
+encoded to Opus with `ffmpeg`.
+
 Photos and documents are downloaded locally and sent to Codex. Images are passed as
 Codex `localImage` inputs when the selected model supports image input; other files
 are saved locally and sent as file paths for Codex to inspect.
@@ -83,6 +89,21 @@ TELEGRAM_FILE_SEND_ROOTS=~
 
 # Max outbound upload size in MB. Defaults to 50.
 TELEGRAM_FILE_SEND_MAX_MB=50
+
+# Local whisper.cpp binary and model for Telegram voice transcription.
+# Defaults to ~/whisper.cpp/build/bin/whisper-cli and ~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin.
+WHISPER_CPP_BIN=~/whisper.cpp/build/bin/whisper-cli
+WHISPER_CPP_MODEL=~/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin
+WHISPER_CPP_LANGUAGE=en
+
+# Voice replies for Codex turns that started from Telegram voice messages.
+# Defaults: true and 3500.
+TELEGRAM_REPLY_WITH_VOICE=true
+TELEGRAM_VOICE_REPLY_MAX_CHARS=3500
+
+# Optional macOS TTS voice and ffmpeg path.
+TELEGRAM_TTS_VOICE=Samantha
+FFMPEG_BIN=/opt/homebrew/bin/ffmpeg
 ```
 
 ## Warning

@@ -4,4 +4,5 @@ dist/
 .tmp-schema/
 .codex-telegram-store.json
 .codex-telegram-attachments/
+.codex-telegram-voice/
 *.log

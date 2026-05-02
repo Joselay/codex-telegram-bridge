@@ -6,12 +6,14 @@ import { loadConfig } from "./config.js";
 import { resolveProjectRoot } from "./project.js";
 import { SessionStore } from "./session-store.js";
 import { TelegramBridgeBot } from "./telegram-bot.js";
+import { VoiceService } from "./voice.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const projectRoot = await resolveProjectRoot(config.cwd);
   const store = new SessionStore(config.storePath);
   const codex = new CodexClient();
+  const voice = new VoiceService(config.voice, projectRoot);
   let bot: TelegramBridgeBot | undefined;
   let stopping = false;
 
@@ -36,6 +38,10 @@ async function main(): Promise<void> {
   });
 
   printWarning(projectRoot);
+  console.log("Checking local voice toolchain...");
+  await voice.validate();
+  console.log("Voice toolchain ready.");
+
   console.log("Starting Codex app-server...");
   await codex.start();
   console.log("Codex app-server initialized.");
@@ -66,6 +72,7 @@ async function main(): Promise<void> {
     supportsImageInput: supportsImageInput(model),
     fileSendRoots: config.telegramFileSendRoots,
     fileSendMaxBytes: config.telegramFileSendMaxBytes,
+    voice,
     codex,
     onStop: () => {
       stop(0);
