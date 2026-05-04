@@ -14,6 +14,9 @@ delivery back to Telegram.
 - Runs against the project directory passed with `--cwd`.
 - Accepts messages only from `TELEGRAM_ALLOWED_USER_ID`.
 - Stores Telegram attachments and temporary delivery files in a per-run temp folder.
+- Transcribes voice input locally. Short conversational voice requests can get
+  voice replies, while web/news/current-information, link-heavy, code, long, or
+  structured answers are sent as text.
 - Runs Codex in YOLO mode with `approvalPolicy="never"` and `sandbox="danger-full-access"`.
 
 ## Requirements

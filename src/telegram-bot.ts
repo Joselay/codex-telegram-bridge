@@ -10,6 +10,7 @@ import { sendLongTelegramMessage } from "./telegram-message.js";
 import { extractFileSendRequests, readCompletedAgentMessage } from "./telegram-text.js";
 import { TelegramTurnState } from "./telegram-turn.js";
 import type { UserMessageRef } from "./telegram-turn.js";
+import { shouldReplyToVoiceTranscriptWithVoice, shouldSynthesizeReplyAsVoice } from "./voice-reply-policy.js";
 import type { VoiceService } from "./voice.js";
 
 type TelegramBotOptions = {
@@ -202,7 +203,7 @@ export class TelegramBridgeBot {
         {
           alreadyReacted: true,
           turnAlreadyStarted: true,
-          replyAsVoice: this.options.voice.replyWithVoice,
+          replyAsVoice: this.options.voice.replyWithVoice && shouldReplyToVoiceTranscriptWithVoice(transcript),
         },
       );
     } catch (error) {
@@ -352,7 +353,7 @@ export class TelegramBridgeBot {
   }
 
   private async sendReplyText(text: string, replyAsVoice: boolean): Promise<void> {
-    if (!replyAsVoice) {
+    if (!replyAsVoice || !shouldSynthesizeReplyAsVoice(text)) {
       await this.sendLongMessage(text);
       return;
     }
@@ -432,7 +433,8 @@ function buildVoiceTranscriptInput(transcript: string): CodexInputItem[] {
       text: [
         "An English Telegram voice message was transcribed locally with whisper.cpp.",
         "Use the transcript below as the user's request and respond normally.",
-        "The bridge may send your final answer back to Telegram as a voice note.",
+        "The bridge may send short conversational final answers back to Telegram as a voice note.",
+        "For web searches, latest/current news, citations, links, code, lists, tables, or other structured output, prefer a text-friendly final answer.",
         "",
         "<transcript>",
         transcript,
